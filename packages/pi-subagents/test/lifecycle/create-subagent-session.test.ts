@@ -70,14 +70,14 @@ describe("createSubagentSession — assembly", () => {
     expect(session.bindExtensions).toHaveBeenCalledWith({});
   });
 
-  it("includes an active parent extension tool before the child session is created", async () => {
+  it("retains an active parent Mailbox tool before the child session is created", async () => {
     await createSubagentSession(
-      { snapshot: { ...STUB_SNAPSHOT, activeTools: ["extension_tool"] }, type: "Explore" },
+      { snapshot: { ...STUB_SNAPSHOT, activeTools: ["mailbox"] }, type: "Explore" },
       defaultDeps(),
     );
 
     expect(io.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      tools: ["read", "extension_tool"],
+      tools: ["read", "mailbox"],
     }));
   });
 
