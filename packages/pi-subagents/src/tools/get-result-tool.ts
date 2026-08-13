@@ -6,6 +6,11 @@ import { formatLifetimeTokens, textResult } from "#src/tools/helpers";
 import type { Subagent } from "#src/types";
 import { formatDuration, getDisplayName } from "#src/ui/display";
 
+const RESULT_WAIT_TIMEOUT_MS = 5_000;
+const RESULT_WAIT_TIMEOUT_MESSAGE =
+	"Timed out waiting for subagent result: blocking indefinitely on result retrieval is not allowed.";
+type ResultWaitOutcome = "settled" | "aborted" | "timedOut";
+
 // ---- Deps interfaces ----
 
 export interface GetResultToolManager {
@@ -32,12 +37,18 @@ export class GetResultTool {
 			return textResult(`Agent not found: "${params.agent_id}". Records are cleared at session start/switch, so it may be from a previous session.`);
 		}
 
-		// Wait for completion if requested. The record owns the decision of whether
-		// it is still awaitable — a queued agent counts, because scheduleVia()
-		// captures its limiter promise at spawn. A parent interrupt ends the wait
-		// without cancelling the agent, leaving the outcome uncollected below.
+		// Wait for completion if requested. A queued agent is awaitable because
+		// scheduleVia() captures its limiter promise at spawn. The local race only
+		// ends this query; neither parent abort nor timeout cancels the child.
 		if (params.wait) {
-			await record.waitUntilSettled(signal);
+			const waitOutcome = await this.waitForResult(record, signal);
+			if (waitOutcome === "timedOut") {
+				return {
+					content: [{ type: "text" as const, text: RESULT_WAIT_TIMEOUT_MESSAGE }],
+					details: undefined,
+					isError: true as const,
+				};
+			}
 		}
 
 		// Pull-delivery edge: the parent is collecting the settled outcome here, so
@@ -48,6 +59,37 @@ export class GetResultTool {
 		}
 
 		return textResult(formatAgentReport(this.buildReport(record, params.verbose)));
+	}
+
+	private async waitForResult(record: Subagent, signal: AbortSignal): Promise<ResultWaitOutcome> {
+		const run = record.promise;
+		if (!run || !record.isActive()) return "settled";
+		if (signal.aborted) return "aborted";
+
+		return new Promise<ResultWaitOutcome>((resolve) => {
+			let resolved = false;
+
+			const finish = (outcome: ResultWaitOutcome): void => {
+				if (resolved) return;
+				resolved = true;
+				clearTimeout(timeout);
+				signal.removeEventListener("abort", onAbort);
+				resolve(outcome);
+			};
+			const onAbort = (): void => finish("aborted");
+
+			signal.addEventListener("abort", onAbort, { once: true });
+			if (signal.aborted) {
+				finish("aborted");
+				return;
+			}
+
+			void run.then(
+				() => finish("settled"),
+				() => finish("settled"),
+			);
+			const timeout = setTimeout(() => finish("timedOut"), RESULT_WAIT_TIMEOUT_MS);
+		});
 	}
 
 	private buildReport(record: Subagent, verbose?: boolean): AgentReport {

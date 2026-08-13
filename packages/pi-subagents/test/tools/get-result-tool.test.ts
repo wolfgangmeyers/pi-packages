@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentTypeRegistry } from "#src/config/agent-types";
+import { NotificationManager } from "#src/observation/notification";
+import { SubagentEventsObserver } from "#src/observation/subagent-events-observer";
 import {
 	GetResultTool,
 	type GetResultToolManager,
@@ -100,6 +102,136 @@ describe("GetResultTool", () => {
 		// After waiting, the record is completed and result is shown
 		expect(result.content[0].text).toContain("Finished after wait.");
 		expect(record.consumed).toBe(true);
+	});
+
+	it("returns a timeout error without cancelling or consuming an active agent", async () => {
+		vi.useFakeTimers();
+		try {
+			const sessionStub = createSubagentSessionStub();
+			sessionStub.runTurnLoop.mockReturnValue(new Promise<never>(() => {}));
+			const record = createTestSubagent({
+				status: "running",
+				completedAt: undefined,
+				execution: makeStubExecution({
+					createSubagentSession: async () => toSubagentSession(sessionStub),
+				}),
+			});
+			record.start();
+			const resultPromise = execute(makeManager(new Map([["agent-1", record]])), {
+				agent_id: "agent-1",
+				wait: true,
+			});
+
+			await vi.advanceTimersByTimeAsync(5_000);
+			const result = await resultPromise;
+
+			expect(result).toEqual({
+				content: [{ type: "text", text: "Timed out waiting for subagent result: blocking indefinitely on result retrieval is not allowed." }],
+				details: undefined,
+				isError: true,
+			});
+			expect(Object.hasOwn(result, "details")).toBe(true);
+			expect(record.status).toBe("running");
+			expect(record.abortController.signal.aborted).toBe(false);
+			expect(record.consumed).toBe(false);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("withholds a timed-out completion during the parent run, then wakes it after settlement", async () => {
+		vi.useFakeTimers();
+		try {
+			const sendMessage = vi.fn();
+			const notifications = new NotificationManager(sendMessage);
+			const observer = new SubagentEventsObserver({
+				emit: vi.fn(),
+				appendEntry: vi.fn(),
+				notifications,
+			});
+			const sessionStub = createSubagentSessionStub();
+			const { promise: runResult, resolve: completeRun } = Promise.withResolvers<{
+				responseText: string;
+				aborted: boolean;
+				steered: boolean;
+			}>();
+			sessionStub.runTurnLoop.mockReturnValue(runResult);
+			const record = createTestSubagent({
+				status: "running",
+				completedAt: undefined,
+				execution: makeStubExecution({
+					createSubagentSession: async () => toSubagentSession(sessionStub),
+				}),
+			});
+			record.start();
+			const resultPromise = execute(makeManager(new Map([["agent-1", record]])), {
+				agent_id: "agent-1",
+				wait: true,
+			});
+			await vi.advanceTimersByTimeAsync(5_000);
+			await resultPromise;
+			notifications.onParentAgentStart();
+			completeRun({ responseText: "finished", aborted: false, steered: false });
+			await record.promise;
+			observer.onSubagentCompleted(record);
+
+			expect(sendMessage).not.toHaveBeenCalled();
+			notifications.onParentAgentSettled();
+			expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+				expect.anything(),
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("wakes an idle parent immediately when a timed-out child completes", async () => {
+		vi.useFakeTimers();
+		try {
+			const sendMessage = vi.fn();
+			const notifications = new NotificationManager(sendMessage);
+			const observer = new SubagentEventsObserver({
+				emit: vi.fn(),
+				appendEntry: vi.fn(),
+				notifications,
+			});
+			const sessionStub = createSubagentSessionStub();
+			const { promise: runResult, resolve: completeRun } = Promise.withResolvers<{
+				responseText: string;
+				aborted: boolean;
+				steered: boolean;
+			}>();
+			sessionStub.runTurnLoop.mockReturnValue(runResult);
+			const record = createTestSubagent({
+				status: "running",
+				completedAt: undefined,
+				execution: makeStubExecution({
+					createSubagentSession: async () => toSubagentSession(sessionStub),
+				}),
+			});
+			record.start();
+			const resultPromise = execute(makeManager(new Map([["agent-1", record]])), {
+				agent_id: "agent-1",
+				wait: true,
+			});
+			await vi.advanceTimersByTimeAsync(5_000);
+			await resultPromise;
+			completeRun({ responseText: "finished", aborted: false, steered: false });
+			await record.promise;
+			observer.onSubagentCompleted(record);
+
+			expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+				expect.anything(),
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+			await execute(makeManager(new Map([["agent-1", record]])), { agent_id: "agent-1", wait: true });
+			notifications.sendCompletion(record);
+			expect(sendMessage).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("waits for a queued agent when wait=true", async () => {
