@@ -138,11 +138,11 @@ export class AgentTool {
 		const registry = this.registry;
 
 		const guidelines = [
-			"- For parallel work, use run_in_background: true on each agent. Foreground calls run sequentially — only one executes at a time.",
+			"- Agents run in the background by default. Set run_in_background: false when you need the call to wait for completion.",
 			...this.agentGuidelines,
 			"- Provide clear, detailed prompts so the agent can work autonomously.",
 			"- Subagent results are returned as text — summarize them for the user.",
-			"- Use run_in_background for work you don't need immediately. You will be notified when it completes.",
+			"- Use run_in_background: false for work you need immediately; background agents notify you when they complete.",
 			"- Use resume with an agent ID to continue a previous agent's work.",
 			"- Use steer_subagent to send mid-run messages to a running background agent.",
 			'- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").',
@@ -196,7 +196,7 @@ ${guidelines}
 				run_in_background: Type.Optional(
 					Type.Boolean({
 						description:
-							"Set to true to run in background. Returns agent ID immediately. You will be notified when it completes.",
+							"Run in background by default. Set to false to wait for completion and receive the result inline.",
 					}),
 				),
 				resume: Type.Optional(

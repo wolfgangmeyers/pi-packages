@@ -203,7 +203,7 @@ describe("resolveSpawnConfig — invocation fields", () => {
       thinking: "high",
       maxTurns: undefined,
       inheritContext: false,
-      runInBackground: false,
+      runInBackground: true,
     });
   });
 });
@@ -233,7 +233,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
     expect(result.presentation.agentTags).toContain("thinking: high");
   });
 
-  it("omits mode label for replace-mode agents", () => {
+  it("shows only the background tag for replace-mode agents by default", () => {
     const result = resolveSpawnConfig(
       { subagent_type: "Explore", prompt: "test", description: "d" },
       testRegistry,
@@ -241,8 +241,8 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
       defaultSettings,
     );
     if ("error" in result) return;
-    // Explore has promptMode: "replace" → no mode label, no invocation overrides
-    expect(result.presentation.agentTags).toEqual([]);
+    // Explore has promptMode: "replace" → no mode label; background is now the default.
+    expect(result.presentation.agentTags).toEqual(["background"]);
   });
 
   it("includes twin tag for append-mode agents like general-purpose", () => {
@@ -257,7 +257,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
     expect(result.presentation.agentTags).toContain("twin");
   });
 
-  it("sets tags to undefined on detailBase for replace-mode agents with no invocation overrides", () => {
+  it("includes the background tag on replace-mode detailBase by default", () => {
     const result = resolveSpawnConfig(
       { subagent_type: "Explore", prompt: "test", description: "d" },
       testRegistry,
@@ -265,8 +265,8 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
       defaultSettings,
     );
     if ("error" in result) return;
-    // Explore has promptMode: "replace" and no invocation overrides → no tags
-    expect(result.presentation.detailBase.tags).toBeUndefined();
+    // Explore has promptMode: "replace" and defaults to background execution.
+    expect(result.presentation.detailBase.tags).toEqual(["background"]);
   });
 });
 

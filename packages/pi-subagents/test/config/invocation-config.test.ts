@@ -75,7 +75,7 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.runInBackground).toBe(true);
   });
 
-  it("defaults booleans to false when neither config nor params set them", () => {
+  it("defaults background execution when neither config nor params set it", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
         inheritContext: undefined,
@@ -85,6 +85,6 @@ describe("resolveAgentInvocationConfig", () => {
     );
 
     expect(resolved.inheritContext).toBe(false);
-    expect(resolved.runInBackground).toBe(false);
+    expect(resolved.runInBackground).toBe(true);
   });
 });

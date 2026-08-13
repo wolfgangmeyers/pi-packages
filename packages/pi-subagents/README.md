@@ -180,7 +180,7 @@ All fields are optional — sensible defaults for everything.
 | `max_turns`         | unlimited      | Max agentic turns before graceful shutdown. `0` or omit for unlimited                                                                                                                                                                                                                                                   |
 | `prompt_mode`       | `append`       | `replace`: parent prompt is the cacheable base; body is appended last with full control (no `<sub_agent_context>` bridge, no `<agent_instructions>` wrapper). `append`: parent prompt is the base; body is wrapped in `<agent_instructions>` and a sub-agent context bridge is injected (agent acts as a "parent twin") |
 | `inherit_context`   | `false`        | Fork parent conversation into agent                                                                                                                                                                                                                                                                                     |
-| `run_in_background` | `false`        | Run in background by default                                                                                                                                                                                                                                                                                            |
+| `run_in_background` | `true`         | Run in background by default; set to `false` to wait for completion                                                                                                                                                                                                                                                     |
 | `enabled`           | `true`         | Set to `false` to disable an agent (useful for hiding a default agent per-project)                                                                                                                                                                                                                                      |
 
 Frontmatter is authoritative.
@@ -193,17 +193,17 @@ If an agent file sets `model`, `thinking`, `max_turns`, `inherit_context`, or `r
 
 Launch a sub-agent.
 
-| Parameter           | Type         | Required | Description                                                      |
-| ------------------- | ------------ | -------- | ---------------------------------------------------------------- |
-| `prompt`            | string       | yes      | The task for the agent                                           |
-| `description`       | string       | yes      | Short 3-5 word summary (shown in UI)                             |
-| `subagent_type`     | string       | yes      | Agent type (built-in or custom)                                  |
-| `model`             | string       | no       | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`) |
-| `thinking`          | string       | no       | Thinking level: off, minimal, low, medium, high, xhigh           |
-| `max_turns`         | number       | no       | Max agentic turns. Omit for unlimited (default)                  |
-| `run_in_background` | boolean      | no       | Run without blocking                                             |
-| `resume`            | string       | no       | Agent ID to resume a previous session                            |
-| `inherit_context`   | boolean      | no       | Fork parent conversation into agent                              |
+| Parameter           | Type    | Required | Description                                                         |
+| ------------------- | ------- | -------- | ------------------------------------------------------------------- |
+| `prompt`            | string  | yes      | The task for the agent                                              |
+| `description`       | string  | yes      | Short 3-5 word summary (shown in UI)                                |
+| `subagent_type`     | string  | yes      | Agent type (built-in or custom)                                     |
+| `model`             | string  | no       | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`)    |
+| `thinking`          | string  | no       | Thinking level: off, minimal, low, medium, high, xhigh              |
+| `max_turns`         | number  | no       | Max agentic turns. Omit for unlimited (default)                     |
+| `run_in_background` | boolean | no       | Run in background by default; set to `false` to wait for completion |
+| `resume`            | string  | no       | Agent ID to resume a previous session                               |
+| `inherit_context`   | boolean | no       | Fork parent conversation into agent                                 |
 
 ### `get_subagent_result`
 

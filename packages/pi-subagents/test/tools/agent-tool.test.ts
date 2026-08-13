@@ -247,6 +247,7 @@ describe("AgentTool — foreground execution", () => {
 			prompt: "do task",
 			description: "fg task",
 			subagent_type: "general-purpose",
+			run_in_background: false,
 		});
 		const text = result.content[0].text;
 		expect(text).toContain("Agent completed");
@@ -262,6 +263,7 @@ describe("AgentTool — foreground execution", () => {
 			prompt: "do task",
 			description: "fg task",
 			subagent_type: "general-purpose",
+			run_in_background: false,
 		});
 		expect(result.content[0].text).toContain("Agent failed");
 		expect(result.content[0].text).toContain("Out of context");
@@ -274,6 +276,7 @@ describe("AgentTool — foreground execution", () => {
 			prompt: "do task",
 			description: "fg task",
 			subagent_type: "general-purpose",
+			run_in_background: false,
 		});
 		expect(result.content[0].text).toContain("spawn failure");
 	});
