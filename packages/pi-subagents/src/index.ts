@@ -22,6 +22,7 @@ import {
 import { AgentTypeRegistry } from "#src/config/agent-types";
 import { loadCustomAgents } from "#src/config/custom-agents";
 import { InterruptHandler, SessionLifecycleHandler, ToolStartHandler } from "#src/handlers/index";
+import { OwnerScopedServiceRegistration } from "#src/handlers/lifecycle";
 import { createChildLifecyclePublisher } from "#src/lifecycle/child-lifecycle";
 import { ConcurrencyLimiter } from "#src/lifecycle/concurrency-limiter";
 import { createSubagentSession, type SubagentSessionDeps } from "#src/lifecycle/create-subagent-session";
@@ -124,16 +125,20 @@ export default function (pi: ExtensionAPI) {
     getRetentionPolicy: () => settings,
   });
 
-  // Typed service published via Symbol.for() for cross-extension access.
-  // Consumers: const { getSubagentsService } = await import("@gotgenes/pi-subagents");
+  // The service is published at session_start, once this extension instance
+  // can key its registration by the owning parent or child session ID.
   const service = new SubagentsServiceAdapter(manager, resolveModel, runtime);
-  publishSubagentsService(service);
+  const serviceRegistration = new OwnerScopedServiceRegistration(
+    service,
+    publishSubagentsService,
+    unpublishSubagentsService,
+  );
 
   const lifecycle = new SessionLifecycleHandler(
     runtime,
     manager,
     () => notifications.dispose(),
-    unpublishSubagentsService,
+    serviceRegistration,
   );
 
   pi.on("session_start", (event, ctx) => lifecycle.handleSessionStart(event, ctx));

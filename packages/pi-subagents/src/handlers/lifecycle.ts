@@ -1,3 +1,4 @@
+import type { SubagentsService } from "#src/service/service";
 import type { SessionContext } from "#src/types";
 
 /**
@@ -20,6 +21,37 @@ export interface LifecycleRuntime {
   clearSessionContext(): void;
 }
 
+/** Owner-scoped service publication used by the session lifecycle handler. */
+export interface LifecycleServiceRegistration {
+  publish(ownerSessionId: string): void;
+  unpublish(): void;
+}
+
+/** Publishes one extension instance's service under its current owning session. */
+export class OwnerScopedServiceRegistration implements LifecycleServiceRegistration {
+  private ownerSessionId: string | undefined;
+
+  constructor(
+    private readonly service: SubagentsService,
+    private readonly publishService: (ownerSessionId: string, service: SubagentsService) => void,
+    private readonly unpublishService: (ownerSessionId: string, service: SubagentsService) => void,
+  ) {}
+
+  publish(ownerSessionId: string): void {
+    if (this.ownerSessionId && this.ownerSessionId !== ownerSessionId) {
+      this.unpublishService(this.ownerSessionId, this.service);
+    }
+    this.publishService(ownerSessionId, this.service);
+    this.ownerSessionId = ownerSessionId;
+  }
+
+  unpublish(): void {
+    if (!this.ownerSessionId) return;
+    this.unpublishService(this.ownerSessionId, this.service);
+    this.ownerSessionId = undefined;
+  }
+}
+
 /**
  * Handles session lifecycle events.
  *
@@ -27,18 +59,20 @@ export interface LifecycleRuntime {
  * - `runtime` — owns session context state
  * - `manager` — manages agent lifecycle (clear, abort, dispose)
  * - `disposeNotifications` — tears down the notification system on shutdown
- * - `unpublishService` — unpublishes the SubagentsService symbol on shutdown
+ * - `serviceRegistration` — publishes and unpublishes this session's service
  */
 export class SessionLifecycleHandler {
   constructor(
     private readonly runtime: LifecycleRuntime,
     private readonly manager: LifecycleManager,
     private readonly disposeNotifications: () => void,
-    private readonly unpublishService: () => void,
+    private readonly serviceRegistration: LifecycleServiceRegistration,
   ) {}
 
   handleSessionStart(_event: unknown, ctx: unknown): void {
-    this.runtime.setSessionContext(ctx as SessionContext);
+    const sessionContext = ctx as SessionContext;
+    this.runtime.setSessionContext(sessionContext);
+    this.serviceRegistration.publish(sessionContext.sessionManager.getSessionId());
     this.manager.clearCompleted();
   }
 
@@ -55,7 +89,7 @@ export class SessionLifecycleHandler {
   // 4. Abort all agents — stop running and queued work
   // 5. Dispose manager — final cleanup
   handleSessionShutdown(): Promise<void> {
-    this.unpublishService();
+    this.serviceRegistration.unpublish();
     this.runtime.clearSessionContext();
     this.disposeNotifications();
     this.manager.abortAll();
