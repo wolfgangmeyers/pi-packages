@@ -37,7 +37,6 @@ export function spawnBackground(
       maxTurns: execution.effectiveMaxTurns,
       inheritContext: execution.inheritContext,
       thinkingLevel: execution.thinking,
-      isBackground: true,
       invocation: execution.agentInvocation,
     });
   } catch (err) {

@@ -2,12 +2,12 @@ import type { AgentToolResult, ExtensionContext, ToolRenderResultOptions } from 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import { AgentTypeRegistry } from "#src/config/agent-types";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import type { AgentSpawnConfig } from "#src/lifecycle/subagent-manager";
 import { spawnBackground } from "#src/tools/background-spawner";
-import { runForeground } from "#src/tools/foreground-runner";
-import { buildAgentGuidelines, buildDetails, buildTypeListText, textResult } from "#src/tools/helpers";
+import { buildAgentGuidelines, buildTypeListText, textResult } from "#src/tools/helpers";
 import { renderAgentResult } from "#src/tools/result-renderer";
 import { type ModelInfo, resolveSpawnConfig } from "#src/tools/spawn-config";
 import type { ParentSessionInfo, Subagent } from "#src/types";
@@ -19,8 +19,7 @@ import { GLYPHS } from "#src/ui/glyphs";
 /** Narrow manager interface — only the methods the Agent tool calls. */
 export interface AgentToolManager {
 	spawn: (snapshot: ParentSnapshot, type: string, prompt: string, opts: AgentSpawnConfig) => string;
-	spawnAndWait: (snapshot: ParentSnapshot, type: string, prompt: string, opts: Omit<AgentSpawnConfig, "isBackground">) => Promise<Subagent>;
-	resume: (id: string, prompt: string, signal: AbortSignal) => Promise<Subagent | undefined>;
+	resume: (id: string, prompt: string, signal?: AbortSignal) => Promise<Subagent | undefined>;
 	getRecord: (id: string) => Subagent | undefined;
 }
 
@@ -59,10 +58,12 @@ export class AgentTool {
 	async execute(
 		toolCallId: string,
 		params: Record<string, unknown>,
-		signal: AbortSignal | undefined,
-		onUpdate: ((update: AgentToolResult<AgentDetails>) => void) | undefined,
+		_signal: AbortSignal | undefined,
+		_onUpdate: ((update: AgentToolResult<AgentDetails>) => void) | undefined,
 		_ctx: ExtensionContext,
 	) {
+		await Promise.resolve();
+
 		// Reload custom agents so new .pi/agents/*.md files are picked up without restart
 		this.registry.reload();
 
@@ -98,36 +99,17 @@ export class AgentTool {
 					`Agent "${params.resume as string}" has no active session to resume.`,
 				);
 			}
-			const record = await this.manager.resume(
+			void this.manager.resume(
 				params.resume as string,
 				params.prompt as string,
-				signal ?? new AbortController().signal,
 			);
-			if (!record) {
-				return textResult(`Failed to resume agent "${params.resume as string}".`);
-			}
-			// Resume-return delivery edge: the resumed outcome is returned directly.
-			record.markConsumed();
-			return textResult(
-				record.result?.trim() ?? record.error?.trim() ?? "No output.",
-				buildDetails(config.presentation.detailBase, record),
-			);
+			return textResult(`Resumed agent "${params.resume as string}" in the background.`);
 		}
 
 		// ---- Background execution ----
-		if (config.execution.runInBackground) {
-			return spawnBackground(
-				this.manager,
-				{ config, snapshot, parentSession, settings: this.settings },
-			);
-		}
-
-		// ---- Foreground execution — stream progress via onUpdate ----
-		return runForeground(
+		return spawnBackground(
 			this.manager,
-			{ config, snapshot, parentSession },
-			signal,
-			onUpdate,
+			{ config, snapshot, parentSession, settings: this.settings },
 		);
 	}
 
@@ -138,33 +120,18 @@ export class AgentTool {
 		const registry = this.registry;
 
 		const guidelines = [
-			"- Agents run in the background by default. Set run_in_background: false when you need the call to wait for completion.",
+			"- Agents always run in the background; completion notifications are delivered automatically.",
 			...this.agentGuidelines,
 			"- Provide clear, detailed prompts so the agent can work autonomously.",
 			"- Subagent results are returned as text — summarize them for the user.",
-			"- Use run_in_background: false for work you need immediately; background agents notify you when they complete.",
 			"- Use resume with an agent ID to continue a previous agent's work.",
 			"- Use steer_subagent to send mid-run messages to a running background agent.",
 			'- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").',
 			"- Use thinking to control extended thinking level.",
 			"- Use inherit_context if the agent needs the parent conversation history.",
 		].join("\n");
-
-		return defineTool({
-			name: "subagent" as const,
-			label: "Subagent",
-			promptSnippet: "subagent: Launch a specialized agent for complex, multi-step tasks.",
-			description: `Launch a new agent to handle complex, multi-step tasks autonomously.
-
-The subagent tool launches specialized agents that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
-
-Available agent types:
-${typeListText}
-
-Guidelines:
-${guidelines}
-`,
-			parameters: Type.Object({
+		const parameters = Type.Object(
+			{
 				prompt: Type.String({
 					description: "The task for the agent to perform.",
 				}),
@@ -193,12 +160,6 @@ ${guidelines}
 						minimum: 1,
 					}),
 				),
-				run_in_background: Type.Optional(
-					Type.Boolean({
-						description:
-							"Run in background by default. Set to false to wait for completion and receive the result inline.",
-					}),
-				),
 				resume: Type.Optional(
 					Type.String({
 						description: "Optional agent ID to resume from. Continues from previous context.",
@@ -210,7 +171,33 @@ ${guidelines}
 							"If true, fork parent conversation into the agent. Default: false (fresh context).",
 					}),
 				),
-			}),
+			},
+			{ additionalProperties: false },
+		);
+
+		return defineTool({
+			name: "subagent" as const,
+			label: "Subagent",
+			promptSnippet: "subagent: Launch a specialized agent for complex, multi-step tasks.",
+			description: `Launch a new agent to handle complex, multi-step tasks autonomously.
+
+The subagent tool launches specialized agents that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
+
+Available agent types:
+${typeListText}
+
+Guidelines:
+${guidelines}
+`,
+			prepareArguments: (args: unknown) => {
+				if (args && typeof args === "object" && "run_in_background" in args) {
+					const value = args.run_in_background;
+					throw new Error(`Unsupported argument "run_in_background": ${JSON.stringify(value)}. Background execution is always enabled.`);
+				}
+				Value.Assert(parameters, args);
+				return args;
+			},
+			parameters,
 
 			// ---- Custom rendering: inline subagent results ----
 

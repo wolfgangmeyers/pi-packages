@@ -144,9 +144,10 @@ function createManagerStub() {
     getRecord: vi.fn<SubagentManagerLike["getRecord"]>(),
     listAgents: vi.fn<SubagentManagerLike["listAgents"]>(() => []),
     abort: vi.fn<SubagentManagerLike["abort"]>(() => true),
-    waitForAll: vi.fn<SubagentManagerLike["waitForAll"]>(async () => {}),
     hasRunning: vi.fn<SubagentManagerLike["hasRunning"]>(() => false),
     registerWorkspaceProvider: vi.fn<SubagentManagerLike["registerWorkspaceProvider"]>(() => () => {}),
+    subscribeLifecycle: vi.fn<SubagentManagerLike["subscribeLifecycle"]>(() => () => {}),
+    getLifecycleSnapshots: vi.fn<SubagentManagerLike["getLifecycleSnapshots"]>(() => []),
   };
 }
 
@@ -259,25 +260,25 @@ describe("SubagentsServiceAdapter — spawn", () => {
       expect.objectContaining({
         model: resolvedModel,
         maxTurns: 5,
-        isBackground: true,
       }),
     );
   });
 
-  it("spawns as foreground when options.foreground is true", () => {
+  it("passes only background-capable options to manager.spawn", () => {
     const mgr = createManagerStub();
-    const svc = new SubagentsServiceAdapter(
-      mgr,
-      vi.fn(),
-      makeRuntimeStub(),
-    );
-    svc.spawn("Plan", "plan work", { foreground: true });
-    expect(mgr.spawn).toHaveBeenCalledWith(
-      expect.anything(), // snapshot
-      "Plan",
-      "plan work",
-      expect.objectContaining({ isBackground: false }),
-    );
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), makeRuntimeStub());
+
+    svc.spawn("Plan", "plan work", { bypassQueue: true });
+
+    const options = mgr.spawn.mock.calls[0][3];
+    expect(options).toEqual({
+      description: "plan work",
+      model: undefined,
+      maxTurns: undefined,
+      thinkingLevel: undefined,
+      inheritContext: undefined,
+      bypassQueue: true,
+    });
   });
 
   it("uses truncated prompt as default description", () => {
@@ -313,7 +314,7 @@ describe("SubagentsServiceAdapter — spawn", () => {
   });
 });
 
-describe("SubagentsServiceAdapter — steer, abort, waitForAll, hasRunning", () => {
+describe("SubagentsServiceAdapter — steer, abort, hasRunning", () => {
   function createSvc(mgr: ReturnType<typeof createManagerStub>) {
     return new SubagentsServiceAdapter(mgr, vi.fn(), makeRuntimeStub());
   }
@@ -335,14 +336,6 @@ describe("SubagentsServiceAdapter — steer, abort, waitForAll, hasRunning", () 
     });
   });
 
-  describe("waitForAll", () => {
-    it("delegates to manager.waitForAll", async () => {
-      const mgr = createManagerStub();
-      const svc = createSvc(mgr);
-      await svc.waitForAll();
-      expect(mgr.waitForAll).toHaveBeenCalled();
-    });
-  });
 
   describe("hasRunning", () => {
     it("delegates to manager.hasRunning", () => {
@@ -403,5 +396,37 @@ describe("SubagentsServiceAdapter — registerWorkspaceProvider", () => {
 
     expect(mgr.registerWorkspaceProvider).toHaveBeenCalledWith(provider);
     expect(result).toBe(disposer);
+  });
+});
+
+describe("SubagentsServiceAdapter — lifecycle", () => {
+  it("delegates lifecycle subscriptions and returns the manager disposer", () => {
+    const disposer = vi.fn();
+    const listener = vi.fn();
+    const mgr = createManagerStub();
+    mgr.subscribeLifecycle.mockReturnValue(disposer);
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), makeRuntimeStub());
+
+    const result = svc.subscribeLifecycle(listener);
+
+    expect(mgr.subscribeLifecycle).toHaveBeenCalledExactlyOnceWith(listener);
+    expect(result).toBe(disposer);
+  });
+
+  it("returns the manager's active lifecycle snapshots", () => {
+    const snapshots = [
+      Object.freeze({
+        id: "agent-1",
+        type: "Explore",
+        description: "Check lifecycle",
+        status: "running" as const,
+      }),
+    ];
+    const mgr = createManagerStub();
+    mgr.getLifecycleSnapshots.mockReturnValue(snapshots);
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), makeRuntimeStub());
+
+    expect(svc.getLifecycleSnapshots()).toBe(snapshots);
+    expect(mgr.getLifecycleSnapshots).toHaveBeenCalledOnce();
   });
 });

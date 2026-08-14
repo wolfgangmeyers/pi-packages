@@ -16,7 +16,7 @@ const defaultRegistry = new AgentTypeRegistry(() => new Map());
 /**
  * Fixture shape returned by `createToolDeps`.
  * Contains the five `AgentTool` constructor params as separate fields so tests
- * can construct the class directly or use individual pieces for spawner/runner tests.
+ * can construct the class directly or use individual pieces for focused tool tests.
  */
 export type AgentToolFixture = {
 	manager: AgentToolManager;
@@ -52,7 +52,6 @@ export function createToolDeps(overrides: Partial<AgentToolFixture> = {}): Agent
 	return {
 		manager: {
 			spawn: vi.fn().mockReturnValue("agent-1"),
-			spawnAndWait: vi.fn().mockResolvedValue(createTestSubagent()),
 			resume: vi.fn().mockResolvedValue(createTestSubagent()),
 			getRecord: vi.fn().mockReturnValue(createTestSubagent()),
 		},

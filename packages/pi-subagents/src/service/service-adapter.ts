@@ -8,7 +8,13 @@
 import type { Model } from "@earendil-works/pi-ai";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
-import type { SpawnOptions, SubagentRecord, SubagentsService } from "#src/service/service";
+import type {
+  SpawnOptions,
+  SubagentLifecycleListener,
+  SubagentLifecycleSnapshot,
+  SubagentRecord,
+  SubagentsService,
+} from "#src/service/service";
 import type { ModelRegistry } from "#src/session/model-resolver";
 import type { SessionContext, Subagent } from "#src/types";
 
@@ -18,9 +24,10 @@ export interface SubagentManagerLike {
   getRecord(id: string): Subagent | undefined;
   listAgents(): Subagent[];
   abort(id: string): boolean;
-  waitForAll(): Promise<void>;
   hasRunning(): boolean;
   registerWorkspaceProvider(provider: WorkspaceProvider): () => void;
+  subscribeLifecycle(listener: SubagentLifecycleListener): () => void;
+  getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[];
 }
 
 /**
@@ -47,7 +54,6 @@ export class SubagentsServiceAdapter implements SubagentsService {
 
     const model = this.resolveModelOption(options?.model);
     const description = options?.description ?? prompt.slice(0, 80);
-    const isBackground = !(options?.foreground ?? false);
 
     const snapshot = this.runtime.buildSnapshot(options?.inheritContext ?? false);
     return this.manager.spawn(snapshot, type, prompt, {
@@ -57,7 +63,6 @@ export class SubagentsServiceAdapter implements SubagentsService {
       thinkingLevel: options?.thinkingLevel,
       inheritContext: options?.inheritContext,
       bypassQueue: options?.bypassQueue,
-      isBackground,
     });
   }
 
@@ -83,16 +88,20 @@ export class SubagentsServiceAdapter implements SubagentsService {
     return outcome.kind !== "rejected";
   }
 
-  async waitForAll(): Promise<void> {
-    return this.manager.waitForAll();
-  }
-
   hasRunning(): boolean {
     return this.manager.hasRunning();
   }
 
   registerWorkspaceProvider(provider: WorkspaceProvider): () => void {
     return this.manager.registerWorkspaceProvider(provider);
+  }
+
+  subscribeLifecycle(listener: SubagentLifecycleListener): () => void {
+    return this.manager.subscribeLifecycle(listener);
+  }
+
+  getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[] {
+    return this.manager.getLifecycleSnapshots();
   }
 
   /** Resolve an optional model-string override against the current session's registry. */

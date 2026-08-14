@@ -10,7 +10,6 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     systemPrompt: "Test agent",
     promptMode: "replace",
     inheritContext: false,
-    runInBackground: false,
     ...overrides,
   };
 }
@@ -23,23 +22,23 @@ describe("resolveAgentInvocationConfig", () => {
         thinking: "high",
         maxTurns: 42,
         inheritContext: false,
-        runInBackground: false,
       }),
       {
         model: "provider/param-model",
         thinking: "minimal",
         max_turns: 1,
         inherit_context: true,
-        run_in_background: true,
       },
     );
 
-    expect(resolved.modelInput).toBe("provider/config-model");
-    expect(resolved.modelFromParams).toBe(false);
-    expect(resolved.thinking).toBe("high");
-    expect(resolved.maxTurns).toBe(42);
-    expect(resolved.inheritContext).toBe(false);
-    expect(resolved.runInBackground).toBe(false);
+    expect(resolved).toEqual({
+      modelInput: "provider/config-model",
+      modelFromParams: false,
+      thinking: "high",
+      maxTurns: 42,
+      inheritContext: false,
+    });
+    expect(resolved).not.toHaveProperty("runInBackground");
   });
 
   it("uses tool-call params when no agent config is available", () => {
@@ -48,43 +47,32 @@ describe("resolveAgentInvocationConfig", () => {
       thinking: "minimal",
       max_turns: 3,
       inherit_context: true,
-      run_in_background: true,
     });
 
-    expect(resolved.modelInput).toBe("provider/param-model");
-    expect(resolved.modelFromParams).toBe(true);
-    expect(resolved.thinking).toBe("minimal");
-    expect(resolved.maxTurns).toBe(3);
-    expect(resolved.inheritContext).toBe(true);
-    expect(resolved.runInBackground).toBe(true);
+    expect(resolved).toEqual({
+      modelInput: "provider/param-model",
+      modelFromParams: true,
+      thinking: "minimal",
+      maxTurns: 3,
+      inheritContext: true,
+    });
   });
 
-  it("lets parent fill in booleans when config leaves them undefined", () => {
+  it("lets the caller fill inheritContext when config leaves it undefined", () => {
     const resolved = resolveAgentInvocationConfig(
-      makeConfig({
-        inheritContext: undefined,
-        runInBackground: undefined,
-      }),
-      {
-        inherit_context: true,
-        run_in_background: true,
-      },
+      makeConfig({ inheritContext: undefined }),
+      { inherit_context: true },
     );
 
     expect(resolved.inheritContext).toBe(true);
-    expect(resolved.runInBackground).toBe(true);
   });
 
-  it("defaults background execution when neither config nor params set it", () => {
+  it("defaults inheritContext to false", () => {
     const resolved = resolveAgentInvocationConfig(
-      makeConfig({
-        inheritContext: undefined,
-        runInBackground: undefined,
-      }),
+      makeConfig({ inheritContext: undefined }),
       {},
     );
 
     expect(resolved.inheritContext).toBe(false);
-    expect(resolved.runInBackground).toBe(true);
   });
 });

@@ -12,7 +12,6 @@ function makeAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     systemPrompt: "You are a test agent.",
     promptMode: "replace",
     inheritContext: false,
-    runInBackground: false,
     ...overrides,
   };
 }
@@ -179,18 +178,7 @@ describe("resolveSpawnConfig — max turns normalization", () => {
 });
 
 describe("resolveSpawnConfig — invocation fields", () => {
-  it("sets runInBackground from params", () => {
-    const result = resolveSpawnConfig(
-      { subagent_type: "general-purpose", prompt: "test", description: "d", run_in_background: true },
-      testRegistry,
-      makeModelInfo(),
-      defaultSettings,
-    );
-    if ("error" in result) return;
-    expect(result.execution.runInBackground).toBe(true);
-  });
-
-  it("builds agentInvocation snapshot", () => {
+  it("builds a background-only agentInvocation snapshot", () => {
     const result = resolveSpawnConfig(
       { subagent_type: "general-purpose", prompt: "test", description: "d", thinking: "high" },
       testRegistry,
@@ -203,8 +191,8 @@ describe("resolveSpawnConfig — invocation fields", () => {
       thinking: "high",
       maxTurns: undefined,
       inheritContext: false,
-      runInBackground: true,
     });
+    expect(result.execution).not.toHaveProperty("runInBackground");
   });
 });
 
@@ -233,7 +221,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
     expect(result.presentation.agentTags).toContain("thinking: high");
   });
 
-  it("shows only the background tag for replace-mode agents by default", () => {
+  it("has no mode tag for replace-mode agents by default", () => {
     const result = resolveSpawnConfig(
       { subagent_type: "Explore", prompt: "test", description: "d" },
       testRegistry,
@@ -241,8 +229,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
       defaultSettings,
     );
     if ("error" in result) return;
-    // Explore has promptMode: "replace" → no mode label; background is now the default.
-    expect(result.presentation.agentTags).toEqual(["background"]);
+    expect(result.presentation.agentTags).toEqual([]);
   });
 
   it("includes twin tag for append-mode agents like general-purpose", () => {
@@ -257,7 +244,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
     expect(result.presentation.agentTags).toContain("twin");
   });
 
-  it("includes the background tag on replace-mode detailBase by default", () => {
+  it("omits tags on replace-mode detailBase by default", () => {
     const result = resolveSpawnConfig(
       { subagent_type: "Explore", prompt: "test", description: "d" },
       testRegistry,
@@ -265,8 +252,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
       defaultSettings,
     );
     if ("error" in result) return;
-    // Explore has promptMode: "replace" and defaults to background execution.
-    expect(result.presentation.detailBase.tags).toEqual(["background"]);
+    expect(result.presentation.detailBase.tags).toBeUndefined();
   });
 });
 

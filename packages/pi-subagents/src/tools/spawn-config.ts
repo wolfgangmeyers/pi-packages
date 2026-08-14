@@ -42,7 +42,6 @@ export interface SpawnExecution {
   effectiveMaxTurns: number | undefined;
   thinking: ThinkingLevel | undefined;
   inheritContext: boolean;
-  runInBackground: boolean;
   agentInvocation: AgentInvocation;
 }
 
@@ -106,8 +105,6 @@ export function resolveSpawnConfig(
 
   const thinking = resolvedConfig.thinking;
   const inheritContext = resolvedConfig.inheritContext;
-  const runInBackground = resolvedConfig.runInBackground;
-
   // Compute display model name (only shown when different from parent)
   const parentModelId = modelInfo.parentModel?.id;
   const effectiveModelId = model?.id;
@@ -125,7 +122,6 @@ export function resolveSpawnConfig(
     thinking,
     maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
     inheritContext,
-    runInBackground,
   };
 
   const modeLabel = getPromptModeLabel(subagentType, registry);
@@ -149,7 +145,6 @@ export function resolveSpawnConfig(
       effectiveMaxTurns,
       thinking,
       inheritContext,
-      runInBackground,
       agentInvocation,
     },
     presentation: { modelName, agentTags, detailBase },

@@ -41,7 +41,6 @@ thinking: high
 max_turns: 30
 prompt_mode: replace
 inherit_context: true
-run_in_background: true
 ---
 
 You are a security auditor.`);
@@ -58,9 +57,20 @@ You are a security auditor.`);
     expect(agent.maxTurns).toBe(30);
     expect(agent.promptMode).toBe("replace");
     expect(agent.inheritContext).toBe(true);
-    expect(agent.runInBackground).toBe(true);
+    expect(agent).not.toHaveProperty("runInBackground");
     expect(agent.systemPrompt).toBe("You are a security auditor.");
   });
+
+  it.each([true, false, "legacy"])(
+    "rejects stale run_in_background frontmatter value %j",
+    (value) => {
+      writeAgent("legacy", `---\nrun_in_background: ${JSON.stringify(value)}\n---\n\nLegacy agent.`);
+
+      expect(() => loadCustomAgents(tmpDir)).toThrow(
+        'Unsupported agent frontmatter "run_in_background" in legacy.md; background execution is always enabled.',
+      );
+    },
+  );
 
   it("uses sensible defaults when frontmatter is empty", () => {
     writeAgent("minimal", `---
@@ -79,7 +89,7 @@ Just a prompt.`);
     expect(agent.maxTurns).toBeUndefined();
     expect(agent.promptMode).toBe("append");
     expect(agent.inheritContext).toBeUndefined();
-    expect(agent.runInBackground).toBeUndefined();
+    expect(agent).not.toHaveProperty("runInBackground");
     expect(agent.systemPrompt).toBe("Just a prompt.");
   });
 

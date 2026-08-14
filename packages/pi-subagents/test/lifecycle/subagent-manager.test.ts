@@ -6,6 +6,7 @@ import type { SubagentSession } from "#src/lifecycle/subagent-session";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
 import { NotificationManager } from "#src/observation/notification";
 import type { RunConfig } from "#src/runtime";
+import type { SubagentLifecycleSnapshot } from "#src/service/service";
 import type { Subagent } from "#src/types";
 import { createBlockingFactory, createSessionFactory } from "#test/helpers/manager-stubs";
 import { createMockSession, createSubagentSessionStub, emitResumeUsageAndCompaction, toSubagentSession } from "#test/helpers/mock-session";
@@ -56,14 +57,6 @@ function createManager(overrides?: {
 function spawnBg(mgr: SubagentManager, prompt = "test", desc = prompt) {
   return mgr.spawn(STUB_SNAPSHOT, "general-purpose", prompt, {
     description: desc,
-    isBackground: true,
-  });
-}
-
-/** Spawn a foreground agent using STUB_SNAPSHOT. */
-function spawnFg(mgr: SubagentManager, prompt = "test", desc = prompt) {
-  return mgr.spawnAndWait(STUB_SNAPSHOT, "general-purpose", prompt, {
-    description: desc,
   });
 }
 
@@ -71,7 +64,6 @@ function spawnFg(mgr: SubagentManager, prompt = "test", desc = prompt) {
 function spawnBgWithToolCall(mgr: SubagentManager, toolCallId: string, prompt = "test", desc = prompt) {
   return mgr.spawn(STUB_SNAPSHOT, "general-purpose", prompt, {
     description: desc,
-    isBackground: true,
     parentSession: { toolCallId },
   });
 }
@@ -149,16 +141,6 @@ describe("SubagentManager — Bug 1 race condition (consumed state vs onComplete
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("onComplete is not called for foreground agents", async () => {
-    let onCompleteCalled = false;
-    ({ manager } = createManager({ observer: { onSubagentCompleted: () => {
-      onCompleteCalled = true;
-    } } }));
-
-    await spawnFg(manager);
-
-    expect(onCompleteCalled).toBe(false);
-  });
 });
 
 describe("SubagentManager — completion callbacks", () => {
@@ -499,7 +481,6 @@ describe("SubagentManager — parent session threading", () => {
 
     manager.spawn(STUB_SNAPSHOT, "general-purpose", "test", {
       description: "test",
-      isBackground: true,
       parentSession: { parentSessionFile: "/sessions/parent.jsonl", parentSessionId: "parent-session-123" },
     });
 
@@ -543,7 +524,37 @@ describe("SubagentManager — dependency injection via options bag", () => {
     expect(manager.getRecord(id)!.result).toBe("second");
   });
 
-  it("fires onSubagentResumed when a background agent is resumed", async () => {
+  it("manager.abort cancels a running child's turn signal", async () => {
+    const { factory, stub } = createSessionFactory();
+    let childSignal: AbortSignal | undefined;
+    stub.runTurnLoop.mockImplementation(
+      (_prompt: string, options: { signal?: AbortSignal }) =>
+        new Promise((resolve, reject) => {
+          if (!options.signal) {
+            reject(new Error("missing child abort signal"));
+            return;
+          }
+          childSignal = options.signal;
+          options.signal.addEventListener(
+            "abort",
+            () => resolve({ responseText: "", aborted: true, steered: false }),
+            { once: true },
+          );
+        }),
+    );
+    ({ manager } = createManager({ createSubagentSession: factory }));
+
+    const id = spawnBg(manager);
+    await vi.waitFor(() => expect(stub.runTurnLoop).toHaveBeenCalledOnce());
+
+    expect(manager.abort(id)).toBe(true);
+    await manager.getRecord(id)!.promise;
+
+    expect(childSignal?.aborted).toBe(true);
+    expect(manager.getRecord(id)!.status).toBe("stopped");
+  });
+
+  it("fires onSubagentResumed when an agent is resumed", async () => {
     const onSubagentResumed = vi.fn();
     const { factory, stub } = createSessionFactory();
     stub.resumeTurnLoop.mockResolvedValue("second");
@@ -555,19 +566,6 @@ describe("SubagentManager — dependency injection via options bag", () => {
 
     expect(onSubagentResumed).toHaveBeenCalledExactlyOnceWith(manager.getRecord(id));
   });
-
-  it("does not fire onSubagentResumed when a foreground agent is resumed", async () => {
-    const onSubagentResumed = vi.fn();
-    const { factory, stub } = createSessionFactory();
-    stub.resumeTurnLoop.mockResolvedValue("second");
-    ({ manager } = createManager({ createSubagentSession: factory, observer: { onSubagentResumed } }));
-
-    const record = await spawnFg(manager);
-    await manager.resume(record.id, "continue");
-
-    expect(onSubagentResumed).not.toHaveBeenCalled();
-  });
-
 });
 
 describe("SubagentManager — queueing and concurrency with injected stubs", () => {
@@ -623,9 +621,8 @@ describe("SubagentManager — queueing and concurrency with injected stubs", () 
     const { manager: mgr, running, queued } = arrangeQueuedPair();
     manager = mgr;
 
-    // A still-queued agent must already expose a settle-on-completion promise,
-    // so waitForAll can await it without relying on a re-poll. (Regression
-    // guard: #374 made the promise lazy; the limiter handle is captured eagerly.)
+    // A still-queued agent must already expose a settle-on-completion promise.
+    // Regression guard: #374 made the promise lazy; the limiter handle is captured eagerly.
     expect(manager.getRecord(queued)!.status).toBe("queued");
     expect(manager.getRecord(queued)!.promise).toBeInstanceOf(Promise);
 
@@ -813,7 +810,6 @@ describe("SubagentManager — onSubagentCreated observer", () => {
 
     const id = manager.spawn(STUB_SNAPSHOT, "general-purpose", "test", {
       description: "test agent",
-      isBackground: true,
     });
 
     expect(onCreated).toHaveBeenCalledOnce();
@@ -822,16 +818,6 @@ describe("SubagentManager — onSubagentCreated observer", () => {
     manager.abort(id);
   });
 
-  it("does not fire onSubagentCreated for foreground agents", async () => {
-    const onCreated = vi.fn();
-    ({ manager } = createManager({ observer: { onSubagentCreated: onCreated } }));
-
-    await manager.spawnAndWait(STUB_SNAPSHOT, "general-purpose", "test", {
-      description: "foreground agent",
-    });
-
-    expect(onCreated).not.toHaveBeenCalled();
-  });
 
   it("fires onSubagentCreated before onSubagentStarted for background agents", async () => {
     const callOrder: string[] = [];
@@ -844,7 +830,6 @@ describe("SubagentManager — onSubagentCreated observer", () => {
 
     const id = manager.spawn(STUB_SNAPSHOT, "general-purpose", "test", {
       description: "bg agent",
-      isBackground: true,
     });
     await manager.getRecord(id)!.promise;
 
@@ -869,7 +854,6 @@ describe("SubagentManager — lifecycle observer forwarding", () => {
 
     const id = manager.spawn(STUB_SNAPSHOT, "general-purpose", "test", {
       description: "test",
-      isBackground: true,
       observer: {
         onSessionCreated: (agent) => {
           received.agent = agent;
@@ -882,21 +866,6 @@ describe("SubagentManager — lifecycle observer forwarding", () => {
     expect(received.agent!.id).toBe(id);
   });
 
-  it("forwards onSessionCreated for foreground agents", async () => {
-    const received: { agent: Subagent | undefined } = { agent: undefined };
-
-    await manager.spawnAndWait(STUB_SNAPSHOT, "general-purpose", "test", {
-      description: "fg",
-      observer: {
-        onSessionCreated: (agent) => {
-          received.agent = agent;
-        },
-      },
-    });
-
-    expect(received.agent).toBeDefined();
-    expect(received.agent!.type).toBe("general-purpose");
-  });
 });
 
 describe("SubagentManager — toolCallId notification wiring", () => {
@@ -921,7 +890,6 @@ describe("SubagentManager — toolCallId notification wiring", () => {
 
     const id = manager.spawn(STUB_SNAPSHOT, "general-purpose", "test", {
       description: "bg",
-      isBackground: true,
     });
     const record = manager.getRecord(id)!;
 
@@ -985,5 +953,186 @@ describe("SubagentManager — registerWorkspaceProvider", () => {
     disposeFirst();
 
     expect(manager.workspaceProvider).toBe(second);
+  });
+
+  it("publishes redacted live snapshots and drops terminal children", async () => {
+    ({ manager } = createManager());
+    const events: unknown[] = [];
+    const unsubscribe = manager.subscribeLifecycle((snapshot) => events.push(snapshot));
+    const id = spawnBg(manager, "private prompt", "Visible description");
+    const record = manager.getRecord(id)!;
+
+    expect(events).toEqual([
+      { id, type: "general-purpose", description: "Visible description", status: "queued" },
+      { id, type: "general-purpose", description: "Visible description", status: "running" },
+    ]);
+    expect(manager.getLifecycleSnapshots()).toEqual([events[1]]);
+
+    await record.promise;
+
+    expect(events.at(-1)).toEqual({ id, type: "general-purpose", description: "Visible description", status: record.status });
+    expect(Object.keys(events[0] as object)).toEqual(["id", "type", "description", "status"]);
+    expect(Object.isFrozen(events[0])).toBe(true);
+    expect(manager.getLifecycleSnapshots()).toEqual([]);
+    expect(manager.getRecord(id)).toBe(record);
+
+    unsubscribe();
+    spawnBg(manager, "another", "Another");
+    expect(events).toHaveLength(3);
+  });
+
+  it("isolates throwing lifecycle subscribers through spawned completion and cleanup", async () => {
+    ({ manager } = createManager());
+    const events: SubagentLifecycleSnapshot[] = [];
+    manager.subscribeLifecycle(() => {
+      throw new Error("broken lifecycle subscriber");
+    });
+    manager.subscribeLifecycle((snapshot) => events.push(snapshot));
+
+    const id = spawnBg(manager, "private prompt", "Visible description");
+    const record = manager.getRecord(id)!;
+    await record.promise;
+
+    expect(events.map((snapshot) => snapshot.status)).toEqual(["queued", "running", "completed"]);
+    expect(manager.getLifecycleSnapshots()).toEqual([]);
+    expect(manager.getRecord(id)).toBe(record);
+    expect(record.status).toBe("completed");
+  });
+
+  it("isolates throwing lifecycle subscribers during resume", async () => {
+    const { factory, stub } = createSessionFactory();
+    ({ manager } = createManager({ createSubagentSession: factory }));
+    manager.subscribeLifecycle(() => {
+      throw new Error("broken lifecycle subscriber");
+    });
+    const events: SubagentLifecycleSnapshot[] = [];
+    manager.subscribeLifecycle((snapshot) => events.push(snapshot));
+    const id = spawnBg(manager);
+    await manager.getRecord(id)!.promise;
+    events.length = 0;
+    stub.resumeTurnLoop.mockResolvedValue("resumed result");
+
+    const record = await manager.resume(id, "resume prompt");
+
+    expect(events.map((snapshot) => snapshot.status)).toEqual(["running", "completed"]);
+    expect(manager.getLifecycleSnapshots()).toEqual([]);
+    expect(record?.result).toBe("resumed result");
+  });
+
+  it("returns defensive lifecycle snapshot arrays", () => {
+    ({ manager } = createManager());
+    spawnBg(manager, "prompt", "Description");
+    const snapshots = manager.getLifecycleSnapshots();
+    expect(Object.isFrozen(snapshots[0])).toBe(true);
+    expect(snapshots).not.toBe(manager.getLifecycleSnapshots());
+  });
+});
+
+describe("SubagentManager — live lifecycle projection", () => {
+  let manager: SubagentManager;
+
+  afterEach(() => {
+    manager.dispose();
+  });
+
+  it("emits and removes a queued abort without consuming its authoritative record", () => {
+    ({ manager } = createManager({
+      createSubagentSession: createBlockingFactory(),
+      getMaxConcurrent: () => 1,
+    }));
+    const events: SubagentLifecycleSnapshot[] = [];
+    manager.subscribeLifecycle((snapshot) => events.push(snapshot));
+    const running = spawnBg(manager, "running", "Running agent");
+    const queued = spawnBg(manager, "secret queued prompt", "Queued agent");
+    const record = manager.getRecord(queued)!;
+
+    expect(manager.abort(queued)).toBe(true);
+
+    expect(events.filter((snapshot) => snapshot.id === queued)).toEqual([
+      { id: queued, type: "general-purpose", description: "Queued agent", status: "queued" },
+      { id: queued, type: "general-purpose", description: "Queued agent", status: "stopped" },
+    ]);
+    expect(manager.getLifecycleSnapshots().map((snapshot) => snapshot.id)).not.toContain(queued);
+    expect(manager.getRecord(queued)).toBe(record);
+    expect(record.consumed).toBe(false);
+    manager.abort(running);
+  });
+
+  it("emits and removes every queued record once during abortAll", async () => {
+    ({ manager } = createManager({
+      createSubagentSession: createBlockingFactory(),
+      getMaxConcurrent: () => 1,
+    }));
+    const events: SubagentLifecycleSnapshot[] = [];
+    manager.subscribeLifecycle((snapshot) => events.push(snapshot));
+    const running = spawnBg(manager, "running");
+    const queuedA = spawnBg(manager, "queued-a");
+    const queuedB = spawnBg(manager, "queued-b");
+
+    expect(manager.abortAll()).toBe(3);
+    await Promise.all([manager.getRecord(queuedA)!.promise, manager.getRecord(queuedB)!.promise]);
+
+    for (const id of [queuedA, queuedB]) {
+      expect(events.filter((snapshot) => snapshot.id === id).map((snapshot) => snapshot.status)).toEqual([
+        "queued",
+        "stopped",
+      ]);
+      expect(manager.getLifecycleSnapshots().map((snapshot) => snapshot.id)).not.toContain(id);
+      expect(manager.getRecord(id)!.consumed).toBe(false);
+    }
+    expect(manager.getRecord(running)).toBeDefined();
+  });
+
+  it("re-emits a resumed agent as running and removes it after completion", async () => {
+    const { factory, stub } = createSessionFactory();
+    ({ manager } = createManager({ createSubagentSession: factory }));
+    const events: SubagentLifecycleSnapshot[] = [];
+    manager.subscribeLifecycle((snapshot) => events.push(snapshot));
+    const id = spawnBg(manager, "initial", "Visible description");
+    const record = manager.getRecord(id)!;
+    await record.promise;
+    events.length = 0;
+    const resumeGate = Promise.withResolvers<string>();
+    stub.resumeTurnLoop.mockReturnValue(resumeGate.promise);
+
+    const resumed = manager.resume(id, "private resume prompt");
+
+    expect(events).toEqual([
+      { id, type: "general-purpose", description: "Visible description", status: "running" },
+    ]);
+    expect(manager.getLifecycleSnapshots()).toEqual(events);
+
+    resumeGate.resolve("resumed result");
+    await resumed;
+
+    expect(events.map((snapshot) => snapshot.status)).toEqual(["running", "completed"]);
+    expect(manager.getLifecycleSnapshots()).toEqual([]);
+    expect(manager.getRecord(id)).toBe(record);
+    expect(record.result).toBe("resumed result");
+    expect(record.consumed).toBe(false);
+  });
+
+  it("removes a resumed agent after an error while preserving its record", async () => {
+    const { factory, stub } = createSessionFactory();
+    ({ manager } = createManager({ createSubagentSession: factory }));
+    const events: SubagentLifecycleSnapshot[] = [];
+    manager.subscribeLifecycle((snapshot) => events.push(snapshot));
+    const id = spawnBg(manager, "initial", "Visible description");
+    const record = manager.getRecord(id)!;
+    await record.promise;
+    events.length = 0;
+    stub.resumeTurnLoop.mockImplementation(() => {
+      throw new Error("resume failed");
+    });
+
+    await manager.resume(id, "private resume prompt");
+
+    expect(events.map((snapshot) => snapshot.status)).toEqual(["running", "error"]);
+    expect(Object.keys(events[1])).toEqual(["id", "type", "description", "status"]);
+    expect(Object.isFrozen(events[1])).toBe(true);
+    expect(manager.getLifecycleSnapshots()).toEqual([]);
+    expect(manager.getRecord(id)).toBe(record);
+    expect(record.error).toContain("resume failed");
+    expect(record.consumed).toBe(false);
   });
 });

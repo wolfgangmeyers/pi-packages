@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getSubagentsService,
   publishSubagentsService,
+  type SpawnOptions,
   SUBAGENT_EVENTS,
   type SubagentsService,
   unpublishSubagentsService,
@@ -47,11 +48,29 @@ describe("SubagentsService accessors", () => {
   });
 });
 
+describe("SubagentsService public contract", () => {
+  it("has no foreground or wait spawn options and no waitForAll method", () => {
+    type HasForegroundOption = "foreground" extends keyof SpawnOptions ? true : false;
+    type HasWaitOption = "wait" extends keyof SpawnOptions ? true : false;
+    type HasWaitForAll = "waitForAll" extends keyof SubagentsService ? true : false;
+    const hasForegroundOption: HasForegroundOption = false;
+    const hasWaitOption: HasWaitOption = false;
+    const hasWaitForAll: HasWaitForAll = false;
+
+    expect({ hasForegroundOption, hasWaitOption, hasWaitForAll }).toEqual({
+      hasForegroundOption: false,
+      hasWaitOption: false,
+      hasWaitForAll: false,
+    });
+  });
+});
+
 describe("SUBAGENT_EVENTS", () => {
   it("exports expected event channel constants", () => {
     expect(SUBAGENT_EVENTS.STARTED).toBe("subagents:started");
     expect(SUBAGENT_EVENTS.COMPLETED).toBe("subagents:completed");
     expect(SUBAGENT_EVENTS.FAILED).toBe("subagents:failed");
+    expect(SUBAGENT_EVENTS.RESUMED).toBe("subagents:resumed");
     expect(SUBAGENT_EVENTS.COMPACTED).toBe("subagents:compacted");
     expect(SUBAGENT_EVENTS.CREATED).toBe("subagents:created");
     expect(SUBAGENT_EVENTS.STEERED).toBe("subagents:steered");

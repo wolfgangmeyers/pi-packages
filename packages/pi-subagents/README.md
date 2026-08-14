@@ -4,7 +4,7 @@
 
 A [pi](https://pi.dev) extension that gives pi **a focused, in-process sub-agent core** — autonomous agents that run inside the same pi runtime (no spawned subprocesses), plus a typed API and lifecycle events other extensions build on.
 Spawn specialized agents that run in isolated sessions — each with its own tools, system prompt, model, and thinking level.
-Run them in foreground or background, steer them mid-run, resume completed sessions, and define your own custom agent types.
+They always run in the background: launch and resume return immediately, while completion notifications provide the result-delivery path.
 
 > Originally forked from [`tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents) by [@tintinweb](https://github.com/tintinweb), now an independently maintained hard fork.
 > See [Comparison with upstream](./docs/comparison-with-upstream.md) for a feature-by-feature comparison and guidance on which to choose.
@@ -52,16 +52,15 @@ subagent({
   subagent_type: "Explore",
   prompt: "Find all files that handle authentication",
   description: "Find auth files",
-  run_in_background: true,
 })
 ```
 
-Foreground agents block until complete and return results inline.
-Background agents return an ID immediately and notify you on completion.
+Agents always return an ID immediately and notify you on completion.
+Use `get_subagent_result` only for a nonblocking snapshot; do not poll a running agent.
 
 ## UI
 
-The extension renders a persistent widget above the editor showing active background agents (foreground runs are rendered inline by the `subagent` tool's progress stream):
+The extension renders a persistent widget above the editor showing active background agents:
 
 ```text
 ● Agents
@@ -180,12 +179,19 @@ All fields are optional — sensible defaults for everything.
 | `max_turns`         | unlimited      | Max agentic turns before graceful shutdown. `0` or omit for unlimited                                                                                                                                                                                                                                                   |
 | `prompt_mode`       | `append`       | `replace`: parent prompt is the cacheable base; body is appended last with full control (no `<sub_agent_context>` bridge, no `<agent_instructions>` wrapper). `append`: parent prompt is the base; body is wrapped in `<agent_instructions>` and a sub-agent context bridge is injected (agent acts as a "parent twin") |
 | `inherit_context`   | `false`        | Fork parent conversation into agent                                                                                                                                                                                                                                                                                     |
-| `run_in_background` | `true`         | Run in background by default; set to `false` to wait for completion                                                                                                                                                                                                                                                     |
 | `enabled`           | `true`         | Set to `false` to disable an agent (useful for hiding a default agent per-project)                                                                                                                                                                                                                                      |
 
 Frontmatter is authoritative.
 If an agent file sets `model`, `thinking`, `max_turns`, `inherit_context`, or `run_in_background`, those values are locked for that agent.
 `subagent` tool parameters only fill fields the agent config leaves unspecified.
+
+## Migration to background-only execution
+
+Version 20 removes foreground execution and blocking result retrieval.
+Remove `run_in_background` from `subagent` calls and custom-agent frontmatter; agents now always launch in the background.
+Remove `wait` from `get_subagent_result`; it now returns a snapshot and never waits, polls, or consumes the record.
+Launch and resume return immediately, and completion notifications are the delivery channel.
+A stale `run_in_background` or `wait` field is rejected before schema validation with an actionable migration error.
 
 ## Tools
 

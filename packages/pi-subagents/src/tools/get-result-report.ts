@@ -45,7 +45,7 @@ export function renderStatsParts(report: AgentReport): string[] {
 /** Select the per-status body: running note, error line, or trimmed result. */
 export function renderReportBody(report: AgentReport): string {
 	if (report.status === "running")
-		return "Agent is still running. Use wait: true or check back later.";
+		return "Agent is still running. Do not poll. Continue other work; you will be notified when this subagent finishes.";
 	if (report.status === "error") return `Error: ${report.error}`;
 	if (report.stoppedWhileQueued)
 		return "Agent was stopped while queued and never started. No work was performed.";

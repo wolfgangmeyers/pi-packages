@@ -23,6 +23,16 @@ import type {
 // SubagentStatus is defined in the lifecycle layer (single home) and re-exported
 // here for the public API surface — mirrors the LifetimeUsage / workspace pattern.
 export type { SubagentStatus } from "#src/lifecycle/subagent";
+
+/** Redacted live lifecycle view intended for cross-extension observation. */
+export interface SubagentLifecycleSnapshot {
+  readonly id: string;
+  readonly type: string;
+  readonly description: string;
+  readonly status: SubagentStatus;
+}
+
+export type SubagentLifecycleListener = (snapshot: SubagentLifecycleSnapshot) => void;
 // Generative extension seam (ADR 0002, Phase 16 Step 2). The provider type
 // and all four collaborator types it references are re-exported by name so
 // consumers can import them directly rather than recovering them via
@@ -58,13 +68,13 @@ export interface SpawnOptions {
   maxTurns?: number;
   thinkingLevel?: string;
   inheritContext?: boolean;
-  foreground?: boolean;
+  /** Start immediately without queue admission; spawn still returns before completion. */
   bypassQueue?: boolean;
 }
 
 /** The public service contract for cross-extension subagent access. */
 export interface SubagentsService {
-  /** Spawn an agent. Returns the agent ID immediately. */
+  /** Spawn a background agent. Returns the agent ID immediately. */
   spawn(type: string, prompt: string, options?: SpawnOptions): string;
 
   /** Get a snapshot of an agent's current state. */
@@ -79,11 +89,14 @@ export interface SubagentsService {
   /** Send a steering message to a running agent. */
   steer(id: string, message: string): Promise<boolean>;
 
-  /** Wait for all running and queued agents to complete. */
-  waitForAll(): Promise<void>;
-
   /** Whether any agents are running or queued. */
   hasRunning(): boolean;
+
+  /** Subscribe to redacted live lifecycle snapshots. Returns an unsubscribe function. */
+  subscribeLifecycle(listener: SubagentLifecycleListener): () => void;
+
+  /** Return the currently active redacted lifecycle snapshots. */
+  getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[];
 
   /**
    * Register the single workspace provider that supplies a child's working

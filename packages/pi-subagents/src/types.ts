@@ -54,8 +54,6 @@ export interface AgentConfig extends AgentIdentity, AgentPromptConfig {
   maxTurns?: number;
   /** Default for spawn: fork parent conversation. undefined = caller decides. */
   inheritContext?: boolean;
-  /** Default for spawn: run in background. undefined = caller decides. */
-  runInBackground?: boolean;
   /** One-line usage guideline for the subagent tool's Guidelines: block. Omitted — no guideline line. */
   toolGuideline?: string;
   /** true = this is an embedded default agent (informational) */
@@ -72,7 +70,6 @@ export interface AgentInvocation {
   thinking?: ThinkingLevel;
   maxTurns?: number;
   inheritContext?: boolean;
-  runInBackground?: boolean;
 }
 
 /**

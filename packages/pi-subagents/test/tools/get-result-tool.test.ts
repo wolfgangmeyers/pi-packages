@@ -1,16 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { AgentTypeRegistry } from "#src/config/agent-types";
-import { NotificationManager } from "#src/observation/notification";
-import { SubagentEventsObserver } from "#src/observation/subagent-events-observer";
-import {
-	GetResultTool,
-	type GetResultToolManager,
-} from "#src/tools/get-result-tool";
+import { GetResultTool, type GetResultToolManager } from "#src/tools/get-result-tool";
 import type { Subagent } from "#src/types";
-import { createTestSubagent, makeStubExecution } from "#test/helpers/make-subagent";
+import { createTestSubagent } from "#test/helpers/make-subagent";
 import { createMockSession, createSubagentSessionStub, toSubagentSession } from "#test/helpers/mock-session";
 import { STUB_CTX } from "#test/helpers/stub-ctx";
 
+const RUNNING_HINT = "Do not poll. Continue other work; you will be notified when this subagent finishes.";
 const testRegistry = new AgentTypeRegistry(() => new Map());
 
 function makeManager(records: Map<string, Subagent> = new Map()): GetResultToolManager {
@@ -19,288 +15,116 @@ function makeManager(records: Map<string, Subagent> = new Map()): GetResultToolM
 
 async function execute(
 	manager: GetResultToolManager,
-	params: { agent_id: string; wait?: boolean; verbose?: boolean },
+	params: { agent_id: string; verbose?: boolean },
 	signal: AbortSignal = new AbortController().signal,
 ) {
 	const tool = new GetResultTool(manager, testRegistry);
 	return tool.execute("tc-1", params, signal, undefined, STUB_CTX);
 }
 
-describe("GetResultTool", () => {
-	it("returns tool definition with correct name", () => {
-		const tool = new GetResultTool(makeManager(), testRegistry);
-		expect(tool.toToolDefinition().name).toBe("get_subagent_result");
-	});
-
-	it("includes promptSnippet", () => {
-		const tool = new GetResultTool(makeManager(), testRegistry);
-		expect(tool.toToolDefinition().promptSnippet).toBe(
-			"get_subagent_result: Check status and retrieve results from a background agent.",
+describe("GetResultTool — public dispatch contract", () => {
+	it("returns the snapshot-only tool definition", () => {
+		const def = new GetResultTool(makeManager(), testRegistry).toToolDefinition();
+		expect(def.name).toBe("get_subagent_result");
+		expect(def.promptSnippet).toBe(
+			"get_subagent_result: Get a nonblocking snapshot. Running agents notify automatically, so polling wastes work and tokens.",
 		);
+		expect(def.description).toContain("Continue other work instead.");
+		expect(def.parameters.additionalProperties).toBe(false);
+		expect(def.parameters.properties).not.toHaveProperty("wait");
 	});
 
-	it("returns not-found message for unknown agent ID", async () => {
+	it.each([
+		[true, 'Unsupported argument "wait": true. Result retrieval is snapshot-only; running agents notify automatically.'],
+		[false, 'Unsupported argument "wait": false. Result retrieval is snapshot-only; running agents notify automatically.'],
+		["later", 'Unsupported argument "wait": "later". Result retrieval is snapshot-only; running agents notify automatically.'],
+	])("rejects stale wait=%j in prepareArguments", (value, message) => {
+		const def = new GetResultTool(makeManager(), testRegistry).toToolDefinition();
+		expect(() => def.prepareArguments?.({ agent_id: "agent-1", wait: value })).toThrow(message);
+	});
+});
+
+describe("GetResultTool — nonblocking snapshots", () => {
+	it("returns not-found copy for an unknown agent", async () => {
 		const result = await execute(makeManager(), { agent_id: "unknown" });
 		expect(result.content[0].text).toContain("Agent not found");
+		expect(result.content[0].text).not.toContain(RUNNING_HINT);
 	});
 
-	it("returns status and result for completed agent", async () => {
-		const records = new Map([["agent-1", createTestSubagent()]]);
-		const result = await execute(makeManager(records), { agent_id: "agent-1" });
-		const text = result.content[0].text;
-		expect(text).toContain("Agent: agent-1");
-		expect(text).toContain("completed");
-		expect(text).toContain("All done.");
-	});
-
-	it("shows running message for in-progress agent", async () => {
-		const records = new Map([["agent-1", createTestSubagent({ status: "running", completedAt: undefined })]]);
-		const result = await execute(makeManager(records), { agent_id: "agent-1" });
-		expect(result.content[0].text).toContain("still running");
-	});
-
-	it("shows error for failed agent", async () => {
-		const records = new Map([["agent-1", createTestSubagent({ status: "error", error: "timeout" })]]);
-		const result = await execute(makeManager(records), { agent_id: "agent-1" });
-		expect(result.content[0].text).toContain("Error: timeout");
-	});
-
-	it("marks the record consumed for a completed agent (pull-delivery edge)", async () => {
+	it("returns the current completed result without consuming it", async () => {
 		const record = createTestSubagent({ toolCallId: "tc-1" });
-		const records = new Map([["agent-1", record]]);
-		await execute(makeManager(records), { agent_id: "agent-1" });
-		expect(record.consumed).toBe(true);
-	});
+		const manager = makeManager(new Map([["agent-1", record]]));
+		const first = await execute(manager, { agent_id: "agent-1" });
+		const second = await execute(manager, { agent_id: "agent-1" });
 
-	it("marks consumed even for a completed agent without a toolCallId", async () => {
-		const record = createTestSubagent();
-		const records = new Map([["agent-1", record]]);
-		await execute(makeManager(records), { agent_id: "agent-1" });
-		expect(record.consumed).toBe(true);
-	});
-
-	it("does not mark a running agent consumed", async () => {
-		const record = createTestSubagent({ status: "running", completedAt: undefined });
-		const records = new Map([["agent-1", record]]);
-		await execute(makeManager(records), { agent_id: "agent-1" });
+		expect(first.content[0].text).toContain("Status: completed");
+		expect(first.content[0].text).toContain("All done.");
+		expect(second.content[0].text).toBe(first.content[0].text);
 		expect(record.consumed).toBe(false);
+		expect(manager.getRecord("agent-1")).toBe(record);
 	});
 
-	it("waits for promise when wait=true and agent is running", async () => {
-		const sessionStub = createSubagentSessionStub();
-		sessionStub.runTurnLoop.mockResolvedValue({ responseText: "Finished after wait.", aborted: false, steered: false });
-		const record = createTestSubagent({
-			status: "running",
-			completedAt: undefined,
-			execution: makeStubExecution({
-				createSubagentSession: async () => toSubagentSession(sessionStub),
-			}),
-		});
-		record.start();
-		const records = new Map([["agent-1", record]]);
-		const result = await execute(makeManager(records), { agent_id: "agent-1", wait: true });
-		// After waiting, the record is completed and result is shown
-		expect(result.content[0].text).toContain("Finished after wait.");
-		expect(record.consumed).toBe(true);
-	});
+	it("returns repeated failed and cancelled snapshots without consuming them", async () => {
+		for (const status of ["error", "stopped"] as const) {
+			const record = createTestSubagent({ status, error: status === "error" ? "timeout" : undefined });
+			const manager = makeManager(new Map([["agent-1", record]]));
+			const first = await execute(manager, { agent_id: "agent-1" });
+			const second = await execute(manager, { agent_id: "agent-1" });
 
-	it("returns a timeout error without cancelling or consuming an active agent", async () => {
-		vi.useFakeTimers();
-		try {
-			const sessionStub = createSubagentSessionStub();
-			sessionStub.runTurnLoop.mockReturnValue(new Promise<never>(() => {}));
-			const record = createTestSubagent({
-				status: "running",
-				completedAt: undefined,
-				execution: makeStubExecution({
-					createSubagentSession: async () => toSubagentSession(sessionStub),
-				}),
-			});
-			record.start();
-			const resultPromise = execute(makeManager(new Map([["agent-1", record]])), {
-				agent_id: "agent-1",
-				wait: true,
-			});
-
-			await vi.advanceTimersByTimeAsync(5_000);
-			const result = await resultPromise;
-
-			expect(result).toEqual({
-				content: [{ type: "text", text: "Timed out waiting for subagent result: blocking indefinitely on result retrieval is not allowed." }],
-				details: undefined,
-				isError: true,
-			});
-			expect(Object.hasOwn(result, "details")).toBe(true);
-			expect(record.status).toBe("running");
-			expect(record.abortController.signal.aborted).toBe(false);
+			expect(second.content[0].text).toBe(first.content[0].text);
 			expect(record.consumed).toBe(false);
-			expect(vi.getTimerCount()).toBe(0);
-		} finally {
-			vi.useRealTimers();
+			expect(manager.getRecord("agent-1")).toBe(record);
 		}
 	});
 
-	it("withholds a timed-out completion during the parent run, then wakes it after settlement", async () => {
-		vi.useFakeTimers();
-		try {
-			const sendMessage = vi.fn();
-			const notifications = new NotificationManager(sendMessage);
-			const observer = new SubagentEventsObserver({
-				emit: vi.fn(),
-				appendEntry: vi.fn(),
-				notifications,
-			});
-			const sessionStub = createSubagentSessionStub();
-			const { promise: runResult, resolve: completeRun } = Promise.withResolvers<{
-				responseText: string;
-				aborted: boolean;
-				steered: boolean;
-			}>();
-			sessionStub.runTurnLoop.mockReturnValue(runResult);
-			const record = createTestSubagent({
-				status: "running",
-				completedAt: undefined,
-				execution: makeStubExecution({
-					createSubagentSession: async () => toSubagentSession(sessionStub),
-				}),
-			});
-			record.start();
-			const resultPromise = execute(makeManager(new Map([["agent-1", record]])), {
-				agent_id: "agent-1",
-				wait: true,
-			});
-			await vi.advanceTimersByTimeAsync(5_000);
-			await resultPromise;
-			notifications.onParentAgentStart();
-			completeRun({ responseText: "finished", aborted: false, steered: false });
-			await record.promise;
-			observer.onSubagentCompleted(record);
-
-			expect(sendMessage).not.toHaveBeenCalled();
-			notifications.onParentAgentSettled();
-			expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
-				expect.anything(),
-				{ deliverAs: "followUp", triggerTurn: true },
-			);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("wakes an idle parent immediately when a timed-out child completes", async () => {
-		vi.useFakeTimers();
-		try {
-			const sendMessage = vi.fn();
-			const notifications = new NotificationManager(sendMessage);
-			const observer = new SubagentEventsObserver({
-				emit: vi.fn(),
-				appendEntry: vi.fn(),
-				notifications,
-			});
-			const sessionStub = createSubagentSessionStub();
-			const { promise: runResult, resolve: completeRun } = Promise.withResolvers<{
-				responseText: string;
-				aborted: boolean;
-				steered: boolean;
-			}>();
-			sessionStub.runTurnLoop.mockReturnValue(runResult);
-			const record = createTestSubagent({
-				status: "running",
-				completedAt: undefined,
-				execution: makeStubExecution({
-					createSubagentSession: async () => toSubagentSession(sessionStub),
-				}),
-			});
-			record.start();
-			const resultPromise = execute(makeManager(new Map([["agent-1", record]])), {
-				agent_id: "agent-1",
-				wait: true,
-			});
-			await vi.advanceTimersByTimeAsync(5_000);
-			await resultPromise;
-			completeRun({ responseText: "finished", aborted: false, steered: false });
-			await record.promise;
-			observer.onSubagentCompleted(record);
-
-			expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
-				expect.anything(),
-				{ deliverAs: "followUp", triggerTurn: true },
-			);
-			await execute(makeManager(new Map([["agent-1", record]])), { agent_id: "agent-1", wait: true });
-			notifications.sendCompletion(record);
-			expect(sendMessage).toHaveBeenCalledTimes(1);
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("waits for a queued agent when wait=true", async () => {
-		const sessionStub = createSubagentSessionStub();
-		sessionStub.runTurnLoop.mockResolvedValue({ responseText: "Finished after the queue.", aborted: false, steered: false });
-		const record = createTestSubagent({
-			status: "queued",
-			completedAt: undefined,
-			execution: makeStubExecution({
-				createSubagentSession: async () => toSubagentSession(sessionStub),
-			}),
+	it("returns a running snapshot with the exact anti-poll hint", async () => {
+		const record = createTestSubagent({ status: "running", completedAt: undefined });
+		const result = await execute(makeManager(new Map([["agent-1", record]])), {
+			agent_id: "agent-1",
 		});
-		// The limiter admits the agent only after the parent has begun waiting.
-		const { promise: slot, resolve: openSlot } = Promise.withResolvers<void>(); // eslint-disable-line @typescript-eslint/no-invalid-void-type -- Promise.withResolvers<void> is valid; rule does not allow void in generic fn call type args
-		record.scheduleVia(async (thunk) => {
-			await slot;
-			await thunk();
-		});
-		const records = new Map([["agent-1", record]]);
-
-		const resultPromise = execute(makeManager(records), { agent_id: "agent-1", wait: true });
-		openSlot();
-
-		const result = await resultPromise;
-		expect(result.content[0].text).toContain("Finished after the queue.");
-		expect(record.consumed).toBe(true);
-	});
-
-	it("reports the current state when the parent turn is interrupted mid-wait", async () => {
-		const sessionStub = createSubagentSessionStub();
-		// A run that never settles — only the interrupt can end this wait.
-		sessionStub.runTurnLoop.mockReturnValue(new Promise<never>(() => {}));
-		const record = createTestSubagent({
-			status: "running",
-			completedAt: undefined,
-			execution: makeStubExecution({
-				createSubagentSession: async () => toSubagentSession(sessionStub),
-			}),
-		});
-		record.start();
-		const controller = new AbortController();
-		const records = new Map([["agent-1", record]]);
-
-		const resultPromise = execute(makeManager(records), { agent_id: "agent-1", wait: true }, controller.signal);
-		controller.abort();
-
-		const result = await resultPromise;
-		expect(result.content[0].text).toContain("Status: running");
-		// The parent never collected an outcome, so the completion nudge still owes it one.
+		const text = result.content[0].text;
+		expect(text).toContain("Status: running");
+		expect(text.endsWith(`\n\n${RUNNING_HINT}`)).toBe(true);
+		expect(text.split(RUNNING_HINT)).toHaveLength(2);
+		expect(text.toLowerCase()).not.toContain("check back");
 		expect(record.consumed).toBe(false);
 	});
 
+	it("reports a queued snapshot without consuming it", async () => {
+		const record = createTestSubagent({ status: "queued", completedAt: undefined });
+		const result = await execute(makeManager(new Map([["agent-1", record]])), {
+			agent_id: "agent-1",
+		});
+		expect(result.content[0].text).toContain("Status: queued");
+		expect(result.content[0].text).not.toContain(RUNNING_HINT);
+		expect(record.consumed).toBe(false);
+	});
+});
+
+describe("GetResultTool — verbose snapshots", () => {
 	it("includes conversation when verbose=true", async () => {
 		const record = createTestSubagent();
 		const stub = createSubagentSessionStub();
 		stub.getConversation.mockReturnValue("[User]: hello");
 		record.subagentSession = toSubagentSession(stub);
-		const records = new Map([["agent-1", record]]);
-		const result = await execute(makeManager(records), { agent_id: "agent-1", verbose: true });
+		const result = await execute(makeManager(new Map([["agent-1", record]])), {
+			agent_id: "agent-1",
+			verbose: true,
+		});
 		expect(result.content[0].text).toContain("--- Agent Conversation ---");
 		expect(result.content[0].text).toContain("[User]: hello");
 	});
 
-	it("points to the transcript when verbose is requested but the session was released", async () => {
+	it("points to the transcript when the live session was released", async () => {
 		const record = createTestSubagent();
-		record.subagentSession = toSubagentSession(createSubagentSessionStub(createMockSession(), "/tasks/agent.jsonl"));
+		record.subagentSession = toSubagentSession(
+			createSubagentSessionStub(createMockSession(), "/tasks/agent.jsonl"),
+		);
 		record.releaseSession();
-		const records = new Map([["agent-1", record]]);
-		const result = await execute(makeManager(records), { agent_id: "agent-1", verbose: true });
+		const result = await execute(makeManager(new Map([["agent-1", record]])), {
+			agent_id: "agent-1",
+			verbose: true,
+		});
 		expect(result.content[0].text).toContain("Full transcript available at: /tasks/agent.jsonl");
 		expect(result.content[0].text).not.toContain("--- Agent Conversation ---");
 	});

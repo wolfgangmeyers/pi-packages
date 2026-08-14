@@ -1,15 +1,15 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import type { AgentConfigLookup } from "#src/config/agent-types";
-import { type AgentReport, formatAgentReport } from "#src/tools/get-result-report";
+import {
+	type AgentReport,
+	formatAgentReport,
+	renderStatsParts,
+} from "#src/tools/get-result-report";
 import { formatLifetimeTokens, textResult } from "#src/tools/helpers";
 import type { Subagent } from "#src/types";
 import { formatDuration, getDisplayName } from "#src/ui/display";
-
-const RESULT_WAIT_TIMEOUT_MS = 5_000;
-const RESULT_WAIT_TIMEOUT_MESSAGE =
-	"Timed out waiting for subagent result: blocking indefinitely on result retrieval is not allowed.";
-type ResultWaitOutcome = "settled" | "aborted" | "timedOut";
 
 // ---- Deps interfaces ----
 
@@ -25,71 +25,28 @@ export class GetResultTool {
 		private readonly registry: AgentConfigLookup,
 	) {}
 
-	async execute(
+	execute(
 		_toolCallId: string,
-		params: { agent_id: string; wait?: boolean; verbose?: boolean },
-		signal: AbortSignal,
+		params: { agent_id: string; verbose?: boolean },
+		_signal: AbortSignal,
 		_onUpdate: unknown,
 		_ctx: unknown,
 	) {
 		const record = this.manager.getRecord(params.agent_id);
 		if (!record) {
-			return textResult(`Agent not found: "${params.agent_id}". Records are cleared at session start/switch, so it may be from a previous session.`);
-		}
-
-		// Wait for completion if requested. A queued agent is awaitable because
-		// scheduleVia() captures its limiter promise at spawn. The local race only
-		// ends this query; neither parent abort nor timeout cancels the child.
-		if (params.wait) {
-			const waitOutcome = await this.waitForResult(record, signal);
-			if (waitOutcome === "timedOut") {
-				return {
-					content: [{ type: "text" as const, text: RESULT_WAIT_TIMEOUT_MESSAGE }],
-					details: undefined,
-					isError: true as const,
-				};
-			}
-		}
-
-		// Pull-delivery edge: the parent is collecting the settled outcome here, so
-		// mark it consumed. The completion nudge scheduled by onSubagentCompleted
-		// re-reads record.consumed at fire time and suppresses itself.
-		if (!record.isActive()) {
-			record.markConsumed();
-		}
-
-		return textResult(formatAgentReport(this.buildReport(record, params.verbose)));
-	}
-
-	private async waitForResult(record: Subagent, signal: AbortSignal): Promise<ResultWaitOutcome> {
-		const run = record.promise;
-		if (!run || !record.isActive()) return "settled";
-		if (signal.aborted) return "aborted";
-
-		return new Promise<ResultWaitOutcome>((resolve) => {
-			let resolved = false;
-
-			const finish = (outcome: ResultWaitOutcome): void => {
-				if (resolved) return;
-				resolved = true;
-				clearTimeout(timeout);
-				signal.removeEventListener("abort", onAbort);
-				resolve(outcome);
-			};
-			const onAbort = (): void => finish("aborted");
-
-			signal.addEventListener("abort", onAbort, { once: true });
-			if (signal.aborted) {
-				finish("aborted");
-				return;
-			}
-
-			void run.then(
-				() => finish("settled"),
-				() => finish("settled"),
+			return Promise.resolve(
+				textResult(`Agent not found: "${params.agent_id}". Records are cleared at session start/switch, so it may be from a previous session.`),
 			);
-			const timeout = setTimeout(() => finish("timedOut"), RESULT_WAIT_TIMEOUT_MS);
-		});
+		}
+
+		const report = this.buildReport(record, params.verbose);
+		return Promise.resolve(
+			textResult(
+				report.status === "running"
+					? formatRunningAgentReport(report)
+					: formatAgentReport(report),
+			),
+		);
 	}
 
 	private buildReport(record: Subagent, verbose?: boolean): AgentReport {
@@ -114,37 +71,61 @@ export class GetResultTool {
 	}
 
 	toToolDefinition() {
-		return defineTool({
-			name: "get_subagent_result" as const,
-			label: "Get Agent Result",
-			promptSnippet:
-				"get_subagent_result: Check status and retrieve results from a background agent.",
-			description:
-				"Check status and retrieve results from a background agent. Use the agent ID returned by Agent with run_in_background.",
-			parameters: Type.Object({
+		const parameters = Type.Object(
+			{
 				agent_id: Type.String({
 					description: "The agent ID to check.",
 				}),
-				wait: Type.Optional(
-					Type.Boolean({
-						description:
-							"If true, wait for the agent to complete before returning. Default: false.",
-					}),
-				),
 				verbose: Type.Optional(
 					Type.Boolean({
 						description:
 							"If true, include the agent's full conversation (messages + tool calls). Default: false.",
 					}),
 				),
-			}),
+			},
+			{ additionalProperties: false },
+		);
+
+		return defineTool({
+			name: "get_subagent_result" as const,
+			label: "Get Agent Result",
+			promptSnippet:
+				"get_subagent_result: Get a nonblocking snapshot. Running agents notify automatically, so polling wastes work and tokens.",
+			description:
+				"Get a nonblocking status/result snapshot for a background agent. Running agents notify automatically when they finish; do not poll because polling wastes work and tokens. Continue other work instead.",
+			prepareArguments: (args: unknown) => {
+				if (args && typeof args === "object" && "wait" in args) {
+					const value = args.wait;
+					throw new Error(
+						`Unsupported argument "wait": ${JSON.stringify(value)}. Result retrieval is snapshot-only; running agents notify automatically.`,
+					);
+				}
+				Value.Assert(parameters, args);
+				return args;
+			},
+			parameters,
 			execute: (
 				toolCallId: string,
-				params: { agent_id: string; wait?: boolean; verbose?: boolean },
+				params: { agent_id: string; verbose?: boolean },
 				signal: AbortSignal,
 				onUpdate: unknown,
 				ctx: unknown,
 			) => this.execute(toolCallId, params, signal, onUpdate, ctx),
 		});
 	}
+}
+
+function formatRunningAgentReport(report: AgentReport): string {
+	let output =
+		`Agent: ${report.id}\n` +
+		`Type: ${report.displayName} | Status: ${report.status} | ${renderStatsParts(report).join(" | ")}\n` +
+		`Description: ${report.description}\n\n` +
+		"Do not poll. Continue other work; you will be notified when this subagent finishes.";
+	if (report.conversation) {
+		output += `\n\n--- Agent Conversation ---\n${report.conversation}`;
+	}
+	if (report.transcriptPath) {
+		output += `\n\nFull transcript available at: ${report.transcriptPath}`;
+	}
+	return output;
 }

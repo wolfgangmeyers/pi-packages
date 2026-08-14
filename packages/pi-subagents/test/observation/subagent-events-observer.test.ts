@@ -221,7 +221,7 @@ describe("SubagentEventsObserver", () => {
 	});
 
 	describe("onSubagentCreated", () => {
-		it("emits subagents:created with id, type, description, and isBackground: true", () => {
+		it("emits subagents:created with the background-only invariant", () => {
 			const { observer, emit } = makeObserver();
 			const record = createTestSubagent({ id: "agent-4", type: "general-purpose", description: "bg task" });
 

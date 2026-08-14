@@ -9,14 +9,12 @@ export interface ResolvedSpawnConfigOptions {
   prompt?: string;
   description?: string;
   model?: string;
-  runInBackground?: boolean;
 }
 
 /**
  * Build a `ResolvedSpawnConfig` for tool tests from flat options.
  *
- * Derives the mirrored regions the hand-built fixtures duplicate:
- * `execution.runInBackground` → `execution.agentInvocation.runInBackground`, and
+ * Derives the mirrored display regions the hand-built fixtures duplicate:
  * `displayName`/`description`/`subagentType`/`model` → `presentation.detailBase`.
  * Flat options sidestep the `Partial<ResolvedSpawnConfig>` deep-merge trap.
  */
@@ -26,7 +24,6 @@ export function createResolvedSpawnConfig(
   const subagentType = options.subagentType ?? "general-purpose";
   const displayName = options.displayName ?? "Agent";
   const description = options.description ?? "task";
-  const runInBackground = options.runInBackground ?? false;
   const modelName = options.model;
 
   return {
@@ -43,13 +40,11 @@ export function createResolvedSpawnConfig(
       effectiveMaxTurns: undefined,
       thinking: undefined,
       inheritContext: false,
-      runInBackground,
       agentInvocation: {
         modelName,
         thinking: undefined,
         maxTurns: undefined,
         inheritContext: false,
-        runInBackground,
       },
     },
     presentation: {

@@ -1,9 +1,9 @@
 /**
  * subagent-manager.ts - Tracks subagents, background execution, resume support.
  *
- * Background agents are subject to a configurable concurrency limit (default: 4).
+ * Agents are subject to a configurable concurrency limit (default: 4).
  * Excess agents are scheduled on a ConcurrencyLimiter and auto-started as running
- * agents complete. Foreground agents bypass the limiter (they block the parent anyway).
+ * agents complete. Queue bypass starts work immediately but still returns asynchronously.
  */
 
 import { randomUUID } from "node:crypto";
@@ -18,7 +18,11 @@ import { SubagentState } from "#src/lifecycle/subagent-state";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
 
 import type { RunConfig } from "#src/runtime";
+import type { SubagentLifecycleListener, SubagentLifecycleSnapshot } from "#src/service/service";
 import type { AgentInvocation, CompactionInfo, ParentSessionInfo, SubagentType, ThinkingLevel } from "#src/types";
+
+/** Hard cap for the redacted live projection; authoritative records are unaffected. */
+export const MAX_LIFECYCLE_SNAPSHOTS = 100;
 
 /**
  * Session-retention windows (minutes). `SettingsManager` satisfies this
@@ -42,14 +46,14 @@ export interface SubagentManagerObserver {
   /** Fires when a resumed run reaches a terminal state (distinct from a fresh completion). */
   onSubagentResumed(record: Subagent): void;
   onSubagentCompacted(record: Subagent, info: CompactionInfo): void;
-  /** Fires synchronously after a background agent record is created (before run). */
+  /** Fires synchronously after an agent record is created (before run). */
   onSubagentCreated(record: Subagent): void;
 }
 
 export interface SubagentManagerOptions {
   /** Assembly factory that produces a born-complete SubagentSession per spawn. */
   createSubagentSession: (params: CreateSubagentSessionParams) => Promise<SubagentSession>;
-  /** Concurrency limiter — schedules background run thunks FIFO against the limit. */
+  /** Concurrency limiter — schedules run thunks FIFO against the limit. */
   limiter: ConcurrencyLimiter;
   /** Base working directory handed to a workspace provider (the parent cwd). */
   baseCwd: string;
@@ -65,11 +69,10 @@ export interface AgentSpawnConfig {
   maxTurns?: number;
   inheritContext?: boolean;
   thinkingLevel?: ThinkingLevel;
-  isBackground?: boolean;
   /**
    * Skip the maxConcurrent queue check for this spawn - start immediately even
-   * if the configured concurrency limit would otherwise queue it. Useful for
-   * callers (e.g. cross-extension RPC) that must not be deferred by the queue.
+   * if the configured concurrency limit would otherwise queue it. The spawn
+   * still returns the agent ID immediately and never waits for completion.
    */
   bypassQueue?: boolean;
   /** Resolved invocation snapshot captured for UI display. */
@@ -84,6 +87,8 @@ export interface AgentSpawnConfig {
 
 export class SubagentManager {
   private agents = new Map<string, Subagent>();
+  private lifecycleSnapshots = new Map<string, SubagentLifecycleSnapshot>();
+  private lifecycleListeners = new Set<SubagentLifecycleListener>();
   private sweepInterval: ReturnType<typeof setInterval>;
   private readonly observer?: SubagentManagerObserver;
   private readonly createSubagentSession: (params: CreateSubagentSessionParams) => Promise<SubagentSession>;
@@ -129,24 +134,64 @@ export class SubagentManager {
     };
   }
 
+  /** Subscribe to redacted live lifecycle snapshots. */
+  subscribeLifecycle(listener: SubagentLifecycleListener): () => void {
+    this.lifecycleListeners.add(listener);
+    return () => this.lifecycleListeners.delete(listener);
+  }
+
+  /** Return a defensive copy of the active lifecycle projection. */
+  getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[] {
+    return [...this.lifecycleSnapshots.values()];
+  }
+
+  private publishLifecycle(record: Subagent, terminal = false): void {
+    const snapshot = Object.freeze({
+      id: record.id,
+      type: record.type,
+      description: record.description,
+      status: record.status,
+    });
+    if (!terminal) {
+      if (this.lifecycleSnapshots.size >= MAX_LIFECYCLE_SNAPSHOTS && !this.lifecycleSnapshots.has(record.id)) {
+        const oldest = this.lifecycleSnapshots.keys().next().value;
+        if (oldest) this.lifecycleSnapshots.delete(oldest);
+      }
+      this.lifecycleSnapshots.set(record.id, snapshot);
+    }
+    try {
+      for (const listener of this.lifecycleListeners) {
+        try {
+          listener(snapshot);
+        } catch (err) {
+          debugLog("lifecycle subscriber", err);
+        }
+      }
+    } finally {
+      if (terminal) this.lifecycleSnapshots.delete(record.id);
+    }
+  }
+
   /** Compose a per-agent lifecycle observer from manager and spawn-config concerns. */
   private buildObserver(options: AgentSpawnConfig): SubagentLifecycleObserver {
     return {
       onStarted: (agent) => {
+        this.publishLifecycle(agent);
         this.observer?.onSubagentStarted(agent);
       },
       onSessionCreated: options.observer?.onSessionCreated
         ? (agent) => options.observer!.onSessionCreated!(agent)
         : undefined,
       onRunFinished: (agent) => {
-        if (options.isBackground) {
-          try { this.observer?.onSubagentCompleted(agent); } catch (err) { debugLog("onSubagentCompleted observer", err); }
-        }
+        try { this.publishLifecycle(agent, true); } catch (err) { debugLog("lifecycle snapshot observer", err); }
+        try { this.observer?.onSubagentCompleted(agent); } catch (err) { debugLog("onSubagentCompleted observer", err); }
+      },
+      onResumeStarted: (agent) => {
+        this.publishLifecycle(agent);
       },
       onResumeFinished: (agent) => {
-        if (options.isBackground) {
-          try { this.observer?.onSubagentResumed(agent); } catch (err) { debugLog("onSubagentResumed observer", err); }
-        }
+        try { this.publishLifecycle(agent, true); } catch (err) { debugLog("lifecycle snapshot observer", err); }
+        try { this.observer?.onSubagentResumed(agent); } catch (err) { debugLog("onSubagentResumed observer", err); }
       },
       onCompacted: (agent, info) => {
         this.observer?.onSubagentCompacted(agent, info);
@@ -155,7 +200,7 @@ export class SubagentManager {
   }
 
   /**
-   * Spawn an agent and return its ID immediately (for background use).
+   * Spawn an agent and return its ID immediately.
    * If the concurrency limit is reached, the agent is queued.
    */
   spawn(
@@ -171,7 +216,7 @@ export class SubagentManager {
       description: options.description,
       invocation: options.invocation,
       state: new SubagentState({
-        status: options.isBackground ? "queued" : "running",
+        status: "queued",
         startedAt: Date.now(),
       }),
       execution: {
@@ -191,36 +236,20 @@ export class SubagentManager {
     });
     this.agents.set(id, record);
 
-    if (options.isBackground) {
-      this.observer?.onSubagentCreated(record);
-    }
+    this.publishLifecycle(record);
+    this.observer?.onSubagentCreated(record);
 
-    if (options.isBackground && !options.bypassQueue) {
+    if (!options.bypassQueue) {
       // Schedule on the limiter — scheduleVia captures the limiter promise
-      // eagerly, so a queued agent is awaitable from spawn; guardedRun guards
-      // against abort-while-queued when the slot frees.
+      // eagerly, so abort-while-queued settles cleanly when the slot frees.
       record.scheduleVia((thunk) => this.limiter.schedule(thunk));
       return id;
     }
 
+    // Queue bypass changes admission only. start() records the asynchronous run,
+    // while this method still returns the ID without awaiting child completion.
     record.start();
     return id;
-  }
-
-  /**
-   * Spawn an agent and wait for completion (foreground use).
-   * Foreground agents bypass the concurrency queue.
-   */
-  async spawnAndWait(
-    snapshot: ParentSnapshot,
-    type: SubagentType,
-    prompt: string,
-    options: Omit<AgentSpawnConfig, "isBackground">,
-  ): Promise<Subagent> {
-    const id = this.spawn(snapshot, type, prompt, { ...options, isBackground: false });
-    const record = this.agents.get(id)!;
-    await record.promise;
-    return record;
   }
 
   /**
@@ -323,27 +352,6 @@ export class SubagentManager {
     // Drop pending thunks (their promises resolve).
     this.limiter.clear();
     return count;
-  }
-
-  /** Wait for all running and queued agents to complete (including queued ones). */
-  // fallow-ignore-next-line unused-class-member
-  async waitForAll(): Promise<void> {
-    // Every spawned agent has a settled-on-completion promise (the limiter starts
-    // queued ones as slots free), so a single allSettled covers the queued case.
-    // The loop only catches agents spawned during the wait.
-    let pending = this.pendingPromises();
-    while (pending.length > 0) {
-      await Promise.allSettled(pending);
-      pending = this.pendingPromises();
-    }
-  }
-
-  /** Promises of all running/queued agents that have one. */
-  private pendingPromises(): Promise<void>[] {
-    return [...this.agents.values()]
-      .filter(r => r.isActive())
-      .map(r => r.promise)
-      .filter((p): p is Promise<void> => p != null);
   }
 
   dispose() {

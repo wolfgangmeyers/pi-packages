@@ -29,6 +29,8 @@ export interface SubagentLifecycleObserver {
 	onSessionCreated?(agent: Subagent): void;
 	/** Fires once when the run completes or fails (for concurrency drain). */
 	onRunFinished?(agent: Subagent): void;
+	/** Fires when a resumed run transitions to running. */
+	onResumeStarted?(agent: Subagent): void;
 	/** Fires once when a resumed run reaches a terminal state. */
 	onResumeFinished?(agent: Subagent): void;
 	/** Fires on compaction events during the run. */
@@ -302,8 +304,8 @@ export class Subagent {
 	}
 
 	/**
-	 * Start execution immediately (foreground / bypassQueue paths).
-	 * Stores the run promise so it is awaitable via the `promise` getter.
+	 * Start execution immediately when queue admission is bypassed.
+	 * Stores the asynchronous run promise for lifecycle coordination.
 	 */
 	start(): void {
 		this._promise = this.guardedRun();
@@ -311,10 +313,9 @@ export class Subagent {
 
 	/**
 	 * Schedule execution through an external concurrency scheduler (the limiter).
-	 * Captures the scheduler's promise eagerly, so a still-queued agent is
-	 * awaitable via the `promise` getter from spawn — not only once its slot opens.
-	 * The guard in guardedRun() makes an abort-while-queued run a no-op when the
-	 * slot finally frees.
+	 * Captures the scheduler's promise eagerly so lifecycle coordination covers
+	 * both queue admission and the run. The guard in guardedRun() makes an
+	 * abort-while-queued run a no-op when the slot finally frees.
 	 */
 	scheduleVia(schedule: (thunk: () => Promise<void>) => Promise<void>): void {
 		this._promise = schedule(() => this.guardedRun());
@@ -331,30 +332,12 @@ export class Subagent {
 	}
 
 	/**
-	 * Wait until this agent's current run settles.
-	 * Resolves immediately when the agent is no longer active or has no run
-	 * handle. A queued agent is awaitable because scheduleVia() captures the
-	 * limiter promise at spawn, so the wait spans both the queue slot and the
-	 * run that follows it.
-	 *
-	 * When `signal` fires the wait ends early and the agent keeps running: this
-	 * is a query, so interrupting it must not cancel the work. Cancelling the
-	 * work on a parent interrupt is InterruptHandler's separate decision.
-	 */
-	async waitUntilSettled(signal: AbortSignal): Promise<void> {
-		const run = this._promise;
-		if (!run || !this.isActive()) return;
-		await settleOrAbort(run, signal);
-	}
-
-	/**
 	 * Resume an existing session with a new prompt, managing the observer
 	 * subscription lifecycle internally (same wiring as run()).
 	 *
 	 * Requires an existing SubagentSession (set when the original run created it).
-	 * The returned promise always resolves (errors are captured internally) and is
-	 * published as the `promise` getter, so waiters track the resume rather than
-	 * the settled handle of the original run.
+	 * The returned promise always resolves because errors are captured internally.
+	 * The current run is also published through the `promise` getter.
 	 * The parent signal flows straight through to resumeTurnLoop — resume does not
 	 * route through this.abortController.
 	 */
@@ -366,13 +349,14 @@ export class Subagent {
 			return Promise.reject(new Error("Subagent not configured for resume — missing session"));
 		}
 
+		this.resetForResume(Date.now());
+		this.execution.observer?.onResumeStarted?.(this);
 		this._promise = this.runResume(subagentSession, prompt, signal);
 		return this._promise;
 	}
 
 	/** The resume body. Always resolves — errors terminate through failResume(). */
 	private async runResume(subagentSession: SubagentSession, prompt: string, signal?: AbortSignal): Promise<void> {
-		this.resetForResume(Date.now());
 		this.listeners.attachObserver(subscribeSubagentObserver(subagentSession, this.state, {
 			onCompact: (info) => this.execution.observer?.onCompacted?.(this, info),
 		}));
@@ -544,19 +528,4 @@ export class Subagent {
 
 		this.execution.observer?.onRunFinished?.(this);
 	}
-}
-
-/**
- * Settle with `run`, or early when `signal` fires — whichever comes first.
- * The inner controller is the listener-cleanup channel: it detaches the abort
- * listener whichever branch wins, so repeated waits within one parent turn do
- * not accumulate listeners on that turn's signal.
- */
-function settleOrAbort(run: Promise<void>, signal: AbortSignal): Promise<void> {
-	if (signal.aborted) return Promise.resolve();
-	const detach = new AbortController();
-	const interrupted = new Promise<void>((resolve) => {
-		signal.addEventListener("abort", () => { resolve(); }, { once: true, signal: detach.signal });
-	});
-	return Promise.race([run, interrupted]).finally(() => { detach.abort(); });
 }

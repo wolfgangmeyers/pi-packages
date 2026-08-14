@@ -24,13 +24,11 @@ const neverShow = () => false;
 // plus a recording UICtx. setWidgetCalls captures the `content` arg of each
 // setWidget call: a function means the widget is registered/visible; undefined
 // means it was cleared (the finished agent has aged out).
-// Fixtures default to a background invocation so they survive the widget's
-// background-only filter; per-agent `invocation` overrides the default.
 function makeWidget(
-	agents: Array<{ id: string; status: string; completedAt?: number; invocation?: { runInBackground: boolean } }>,
+	agents: Array<{ id: string; status: string; completedAt?: number }>,
 ) {
 	const manager = {
-		listAgents: () => agents.map(a => ({ invocation: { runInBackground: true }, ...a })),
+		listAgents: () => agents,
 	} as unknown as SubagentManager;
 	const registry = new AgentTypeRegistry(() => new Map());
 	const widget = new AgentWidget(manager, registry);
@@ -217,7 +215,6 @@ describe("AgentWidget — projection reads activity off Subagent records", () =>
 			startedAt: Date.now() - 100,
 			turnCount: 3,
 			activeTools: ["read"],
-			invocation: { runInBackground: true },
 		});
 		const manager = { listAgents: () => [record] } as unknown as SubagentManager;
 		const registry = new AgentTypeRegistry(() => new Map());
@@ -328,7 +325,7 @@ describe("AgentWidget — self-drives from lifecycle notifications", () => {
 	});
 });
 
-describe("AgentWidget — background-only filtering", () => {
+describe("AgentWidget — background-only invariant", () => {
 	function setup(records: Subagent[]) {
 		const manager = { listAgents: () => records } as unknown as SubagentManager;
 		const registry = new AgentTypeRegistry(() => new Map());
@@ -352,39 +349,26 @@ describe("AgentWidget — background-only filtering", () => {
 		return { widget, lastContent, renderLines };
 	}
 
-	it("does not register the widget when only foreground agents exist", () => {
-		const { widget, lastContent } = setup([
-			createTestSubagent({
-				id: "fg1",
-				status: "running",
-				completedAt: undefined,
-				invocation: { runInBackground: false },
-			}),
-		]);
-		widget.update();
-		expect(lastContent()).toBeUndefined();
-	});
-
-	it("renders only background agents when foreground and background agents are mixed", () => {
+	it("renders every tracked agent without an execution-mode discriminator", () => {
 		const { widget, renderLines } = setup([
 			createTestSubagent({
-				id: "bg1",
+				id: "agent-1",
 				status: "running",
 				completedAt: undefined,
-				description: "background task",
-				invocation: { runInBackground: true },
+				description: "first background task",
 			}),
 			createTestSubagent({
-				id: "fg1",
+				id: "agent-2",
 				status: "running",
 				completedAt: undefined,
-				description: "foreground task",
-				invocation: { runInBackground: false },
+				description: "second background task",
 			}),
 		]);
+
 		widget.update();
+
 		const text = renderLines().join("\n");
-		expect(text).toContain("background task");
-		expect(text).not.toContain("foreground task");
+		expect(text).toContain("first background task");
+		expect(text).toContain("second background task");
 	});
 });

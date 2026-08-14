@@ -120,7 +120,7 @@ export class AgentWidget implements SubagentManagerObserver {
     this.startLoop();
   }
 
-  /** A background subagent was created (queued) — ensure the loop is live and render. */
+  /** A subagent was created (queued) — ensure the loop is live and render. */
   onSubagentCreated(_record: Subagent) {
     this.startLoop();
   }
@@ -158,16 +158,6 @@ export class AgentWidget implements SubagentManagerObserver {
     return age < maxAge;
   }
 
-  /**
-   * Background agents only — the widget's sole audience (ADR-0004 Decision A).
-   * Foreground runs are rendered by the `subagent` tool's inline `onUpdate` stream,
-   * so funneling both `listAgents()` call sites through this accessor applies the
-   * background predicate exactly once at the source.
-   */
-  private listBackgroundAgents(): Subagent[] {
-    return this.manager.listAgents().filter(record => record.invocation?.runInBackground === true);
-  }
-
   /** Project a live Subagent record onto a pure-data WidgetAgent snapshot. */
   private toWidgetAgent(record: Subagent): WidgetAgent {
     return {
@@ -192,7 +182,7 @@ export class AgentWidget implements SubagentManagerObserver {
   /** Delegate rendering to the pure widget-renderer module. */
   private renderWidget(tui: TuiSurface, theme: Theme): string[] {
     return renderWidgetLines({
-      agents: this.listBackgroundAgents().map(r => this.toWidgetAgent(r)),
+      agents: this.manager.listAgents().map(r => this.toWidgetAgent(r)),
       registry: this.registry,
       spinnerFrame: this.widgetFrame,
       terminalWidth: tui.terminal.columns,
@@ -203,10 +193,10 @@ export class AgentWidget implements SubagentManagerObserver {
 
   /**
    * Unregister the widget, clear the status bar, stop the interval timer, and
-   * purge stale `finishedTurnAge` entries for agents no longer in `backgroundAgents`.
+   * purge stale `finishedTurnAge` entries for agents no longer tracked.
    * Called only from `update`'s idle path — not from `dispose`.
    */
-  private clearWidget(backgroundAgents: readonly AgentSummary[]): void {
+  private clearWidget(agents: readonly AgentSummary[]): void {
     if (this.widgetRegistered) {
       this.uiCtx!.setWidget("agents", undefined);
       this.widgetRegistered = false;
@@ -218,7 +208,7 @@ export class AgentWidget implements SubagentManagerObserver {
     }
     if (this.widgetInterval) { clearInterval(this.widgetInterval); this.widgetInterval = undefined; }
     for (const [id] of this.finishedTurnAge) {
-      if (!backgroundAgents.some(a => a.id === id)) this.finishedTurnAge.delete(id);
+      if (!agents.some(a => a.id === id)) this.finishedTurnAge.delete(id);
     }
   }
 
@@ -260,12 +250,12 @@ export class AgentWidget implements SubagentManagerObserver {
   update() {
     if (!this.uiCtx) return;
 
-    const backgroundAgents = this.listBackgroundAgents();
-    this.seedFinishedAgents(backgroundAgents);
-    const state = assembleWidgetState(backgroundAgents, (id, status) => this.shouldShowFinished(id, status));
+    const agents = this.manager.listAgents();
+    this.seedFinishedAgents(agents);
+    const state = assembleWidgetState(agents, (id, status) => this.shouldShowFinished(id, status));
 
     if (!state.hasActive && !state.hasFinished) {
-      this.clearWidget(backgroundAgents);
+      this.clearWidget(agents);
       return;
     }
 

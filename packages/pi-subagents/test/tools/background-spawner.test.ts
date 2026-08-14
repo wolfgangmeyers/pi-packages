@@ -11,7 +11,6 @@ function makeConfig(overrides: Parameters<typeof createResolvedSpawnConfig>[0] =
     displayName: "General-purpose",
     prompt: "do something",
     description: "bg task",
-    runInBackground: true,
     ...overrides,
   });
 }

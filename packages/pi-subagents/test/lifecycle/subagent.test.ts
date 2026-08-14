@@ -782,65 +782,6 @@ describe("Subagent.scheduleVia() — eager promise capture", () => {
 	});
 });
 
-describe("Subagent.waitUntilSettled()", () => {
-	it("resolves immediately for an agent that has no run handle", async () => {
-		const agent = makeSubagent({ status: "queued" });
-		await expect(agent.waitUntilSettled(new AbortController().signal)).resolves.toBeUndefined();
-	});
-
-	it("resolves immediately for an agent that already left the active set", async () => {
-		const agent = makeSubagent({ status: "completed", result: "done", startedAt: 1, completedAt: 2 });
-		agent.start();
-		await agent.promise;
-		await expect(agent.waitUntilSettled(new AbortController().signal)).resolves.toBeUndefined();
-	});
-
-	it("spans the queue slot and the run that follows it", async () => {
-		const agent = makeSubagent({ status: "queued" });
-		const { promise: gate, resolve: openSlot } = Promise.withResolvers<void>(); // eslint-disable-line @typescript-eslint/no-invalid-void-type -- Promise.withResolvers<void> is valid; rule does not allow void in generic fn call type args
-		agent.scheduleVia(async (thunk) => {
-			await gate;
-			await thunk();
-		});
-
-		const wait = agent.waitUntilSettled(new AbortController().signal);
-		openSlot();
-		await wait;
-
-		expect(agent.status).toBe("completed");
-	});
-
-	it("ends the wait on interrupt without cancelling the agent", async () => {
-		const agent = makeSubagent({ status: "queued" });
-		const { promise: gate, resolve: openSlot } = Promise.withResolvers<void>(); // eslint-disable-line @typescript-eslint/no-invalid-void-type -- Promise.withResolvers<void> is valid; rule does not allow void in generic fn call type args
-		agent.scheduleVia(async (thunk) => {
-			await gate;
-			await thunk();
-		});
-		const controller = new AbortController();
-
-		const wait = agent.waitUntilSettled(controller.signal);
-		controller.abort();
-		await wait;
-
-		// Interrupting the query must not cancel the work: the agent is still
-		// queued and still runs once its slot opens.
-		expect(agent.status).toBe("queued");
-		openSlot();
-		await agent.promise;
-		expect(agent.status).toBe("completed");
-	});
-
-	it("returns immediately when the signal is already aborted", async () => {
-		const agent = makeSubagent({ status: "queued" });
-		agent.scheduleVia(() => new Promise<never>(() => {}));
-
-		await agent.waitUntilSettled(AbortSignal.abort());
-
-		expect(agent.status).toBe("queued");
-	});
-});
-
 // ── Agent.resume() ─────────────────────────────────────────────────────────────
 
 /** Create an Agent with a SubagentSession already attached, ready for resume(). */

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BackgroundManagerDeps } from "#src/tools/background-spawner";
-import type { ForegroundManagerDeps } from "#src/tools/foreground-runner";
 import { createToolDeps } from "./make-deps";
 import { STUB_SNAPSHOT } from "./stub-ctx";
 
@@ -11,15 +10,10 @@ describe("createToolDeps", () => {
 			expect(manager.spawn(STUB_SNAPSHOT, "general-purpose", "prompt", { description: "test" })).toBe("agent-1");
 		});
 
-		it("spawnAndWait resolves to a completed record", async () => {
-			const { manager } = createToolDeps();
-			const record = await manager.spawnAndWait(STUB_SNAPSHOT, "general-purpose", "prompt", { description: "test" });
-			expect(record.status).toBe("completed");
-		});
 
 		it("resume resolves to a completed record", async () => {
 			const { manager } = createToolDeps();
-			const record = await manager.resume("id-1", "prompt", new AbortController().signal);
+			const record = await manager.resume("id-1", "prompt");
 			expect(record?.status).toBe("completed");
 		});
 
@@ -79,10 +73,5 @@ describe("createToolDeps", () => {
 			expect(bgManager.getRecord).toBeTypeOf("function");
 		});
 
-		it("manager satisfies ForegroundManagerDeps structurally", () => {
-			const { manager } = createToolDeps();
-			const fgManager: ForegroundManagerDeps = manager;
-			expect(fgManager.spawnAndWait).toBeTypeOf("function");
-		});
 	});
 });

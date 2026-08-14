@@ -52,6 +52,9 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
     }
 
     const { frontmatter: fm, body } = parseFrontmatter(content);
+    if (Object.hasOwn(fm, "run_in_background")) {
+      throw new Error(`Unsupported agent frontmatter "run_in_background" in ${file}; background execution is always enabled.`);
+    }
 
     agents.set(name, {
       name,
@@ -64,7 +67,6 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       systemPrompt: body.trim(),
       promptMode: fm.prompt_mode === "replace" ? "replace" : "append",
       inheritContext: fm.inherit_context != null ? fm.inherit_context === true : undefined,
-      runInBackground: fm.run_in_background != null ? fm.run_in_background === true : undefined,
       enabled: fm.enabled !== false,  // default true; explicitly false disables
       source,
     });
