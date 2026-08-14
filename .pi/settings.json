@@ -4,7 +4,6 @@
     "../packages/pi-github-tools",
     "../packages/pi-autoformat",
     "../packages/pi-subagents",
-    "../packages/pi-subagents-worktrees",
     "../packages/pi-session-tools",
     "../packages/pi-nocd",
 
