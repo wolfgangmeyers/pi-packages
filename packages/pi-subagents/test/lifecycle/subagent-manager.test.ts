@@ -1035,6 +1035,20 @@ describe("SubagentManager — live lifecycle projection", () => {
     manager.dispose();
   });
 
+  it("preserves the explicit launch description in the live snapshot", () => {
+    ({ manager } = createManager());
+    const id = spawnBg(manager, "sleep for two minutes", "Soak sleeper 1 2m");
+
+    expect(manager.getLifecycleSnapshots()).toEqual([
+      {
+        id,
+        type: "general-purpose",
+        description: "Soak sleeper 1 2m",
+        status: "running",
+      },
+    ]);
+  });
+
   it("emits and removes a queued abort without consuming its authoritative record", () => {
     ({ manager } = createManager({
       createSubagentSession: createBlockingFactory(),
