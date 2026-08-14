@@ -7,9 +7,9 @@ This document describes the architecture of the pi-subagents fork: a focused, co
 1. **Narrow core** — the extension owns agent spawning, execution, and result retrieval.
    Everything else is a consumer.
 2. **Composable by default** — other extensions can spawn agents, observe their lifecycle, and display their state without importing this package directly.
-3. **Typed API boundary** — this package exports a `SubagentsService` interface and `Symbol.for()` accessors (`publishSubagentsService` / `getSubagentsService`).
-   Consumers declare this package as an optional peer dependency and use dynamic import for compile-time types.
-   The runtime bridge is `Symbol.for("@gotgenes/pi-subagents:service")` on `globalThis` — no separate API package.
+3. **Typed API boundary** — this package exports a `SubagentsService` interface and owner-scoped `Symbol.for()` accessors for publication, lookup, and subscription.
+   Consumers declare this package as an optional peer dependency and use dynamic import when the dependency is optional.
+   The runtime bridge is a bounded registry stored under `Symbol.for("@gotgenes/pi-subagents:service-registry")` on `globalThis`.
 4. **No time-based scheduling** — cron-style timed dispatch (upstream's `schedule.ts` subsystem) is removed from the core (#52).
    Timed dispatch is a separate concern that any extension can implement by calling `spawn()` on the published API.
    The max-concurrent admission gate is not scheduling in this sense — concurrency management stays in core.
@@ -380,7 +380,7 @@ The `/subagents:sessions` navigator reads messages via `Subagent.agentMessages` 
 flowchart TD
     subgraph core["@gotgenes/pi-subagents"]
         direction TB
-        exports["SubagentsService API<br/>publish / getSubagentsService<br/>SubagentRecord, SubagentStatus"]
+        exports["SubagentsService API<br/>owner-scoped publish / get / subscribe<br/>SubagentRecord, SubagentStatus"]
         engine["Tools: subagent, get_subagent_result,<br/>steer_subagent<br/>SubagentManager, createSubagentSession, SubagentSession"]
         ui_int["Internal UI: widget, session-navigator,<br/>subagents-settings"]
     end
@@ -390,8 +390,9 @@ flowchart TD
     core -- "Symbol.for on globalThis" --> future["any future extension"]
 ```
 
-Consumers call `getSubagentsService()?.spawn(...)` at runtime.
-They declare this package as an optional peer dependency and use dynamic import for compile-time types.
+Consumers pass `ctx.sessionManager.getSessionId()` to `getSubagentsService(ownerSessionId)` for a one-time lookup.
+Long-lived consumers use `subscribeSubagentsService(ownerSessionId, listener)` so publication, replacement, and removal rebind their integration immediately.
+They declare this package as an optional peer dependency and use dynamic import when needed.
 
 ### What the core owns
 
@@ -428,15 +429,15 @@ They declare this package as an optional peer dependency and use dynamic import 
 
 ## SubagentsService
 
-The `SubagentsService` interface, accessor functions, and serializable types are exported from `@gotgenes/pi-subagents` via the `./service` export map entry.
+The `SubagentsService` interface, accessor functions, listener type, and serializable types are exported from the package root.
 No separate API package is needed.
 
-Consumers declare this package as an optional peer dependency:
+Consumers declare the matching major as an optional peer dependency:
 
 ```json
 {
   "peerDependencies": {
-    "@gotgenes/pi-subagents": ">=5.0.0"
+    "@gotgenes/pi-subagents": ">=20.0.0"
   },
   "peerDependenciesMeta": {
     "@gotgenes/pi-subagents": { "optional": true }
@@ -444,47 +445,56 @@ Consumers declare this package as an optional peer dependency:
 }
 ```
 
-At runtime, consumers use dynamic import for type-safe access to the accessor functions:
+A one-time consumer looks up the service owned by its current Pi session:
 
 ```typescript
 const { getSubagentsService } = await import("@gotgenes/pi-subagents");
-const svc = getSubagentsService();
+const ownerSessionId = ctx.sessionManager.getSessionId();
+const svc = getSubagentsService(ownerSessionId);
 if (svc) {
   svc.spawn("Explore", "Check for stale TODOs");
 }
 ```
 
-Pi's extension loader creates a fresh `jiti` instance per extension with `moduleCache: false`, so module-scoped singletons don't survive across extensions.
-The accessor functions use `Symbol.for("@gotgenes/pi-subagents:service")` on `globalThis`, which is process-global by spec, to bridge this gap.
-The dynamic import provides compile-time types; the `Symbol.for()` key is the actual runtime channel.
+A long-lived consumer subscribes at `session_start` and releases both its subscription and any service-owned registration at shutdown:
+
+```typescript
+const { subscribeSubagentsService } = await import("@gotgenes/pi-subagents");
+let unregisterProvider: (() => void) | undefined;
+const unsubscribe = subscribeSubagentsService(
+  ctx.sessionManager.getSessionId(),
+  (service) => {
+    unregisterProvider?.();
+    unregisterProvider = service?.registerWorkspaceProvider(provider);
+  },
+);
+
+unsubscribe();
+unregisterProvider?.();
+```
+
+The listener receives the current service synchronously, including `undefined`, and receives every later replacement or removal for that owner.
+Each subscription has its own disposer even when callers reuse the same listener function.
+Listener exceptions are isolated and available through debug logging.
+
+Pi's extension loader creates a fresh `jiti` instance per extension with `moduleCache: false`, so module-scoped singletons do not survive across extensions.
+The accessors share an owner-keyed registry under `Symbol.for("@gotgenes/pi-subagents:service-registry")` on `globalThis`, which is process-global by specification.
+The registry retains at most 100 services and protects owners with active subscribers from insertion-order eviction.
+When all 100 retained owners have subscribers, publication for a new owner throws instead of evicting an interested owner.
+Child disposal removes the child's published service because Pi's direct `AgentSession.dispose()` path does not emit `session_shutdown`.
 
 ### Interface
 
-See `src/service.ts` for the canonical definition.
+See `src/service/service.ts` for the canonical definition.
 Key types:
 
-- `SubagentsService` — `spawn`, `getRecord`, `listAgents`, `abort`, `steer`, `waitForAll`, `hasRunning`.
-- `SubagentRecord` — serializable agent snapshot (no live session objects).
-- `SpawnOptions` — `description`, `model`, `maxTurns`, `thinkingLevel`, `inheritContext`, `foreground`, `bypassQueue`.
+- `SubagentsService` — `spawn`, `getRecord`, `listAgents`, `abort`, `steer`, `hasRunning`, lifecycle observation, and workspace-provider registration.
+- `SubagentsServiceListener` — observes one owner's current service.
+- `SubagentRecord` — serializable agent snapshot with no live session objects.
+- `SpawnOptions` — `description`, `model`, `maxTurns`, `thinkingLevel`, `inheritContext`, `bypassQueue`.
 - `SUBAGENT_EVENTS` — channel constants for `pi.events` subscriptions.
 
-### Accessor pattern
-
-```typescript
-const SERVICE_KEY = Symbol.for("@gotgenes/pi-subagents:service");
-
-export function publishSubagentsService(service: SubagentsService): void {
-  (globalThis as Record<symbol, unknown>)[SERVICE_KEY] = service;
-}
-
-export function getSubagentsService(): SubagentsService | undefined {
-  return (globalThis as Record<symbol, unknown>)[SERVICE_KEY] as
-    | SubagentsService
-    | undefined;
-}
-```
-
-If Pi gains a native service registry ([earendil-works/pi#4207]), these accessors can be updated to delegate to `pi.registerService()` / `pi.getService()` internally while keeping the same consumer API.
+If Pi gains a native service registry ([earendil-works/pi#4207]), these accessors can delegate to it internally while preserving the owner-scoped consumer API.
 
 ### Lifecycle events
 

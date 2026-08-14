@@ -385,14 +385,37 @@ This package exposes two public subpath exports for companion extensions to impo
 
 ### `@gotgenes/pi-subagents` — cross-extension service contract
 
-Access the subagent service from another extension at runtime:
+Access the service for the current owning Pi session by its session ID:
 
 ```typescript
 const { getSubagentsService } = await import("@gotgenes/pi-subagents");
-const svc = getSubagentsService();
+const ownerSessionId = ctx.sessionManager.getSessionId();
+const svc = getSubagentsService(ownerSessionId);
 svc?.spawn("Explore", "Check for stale TODOs");
 ```
 
+Long-lived consumers should subscribe so they handle services published or replaced after their own extension initializes:
+
+```typescript
+const { subscribeSubagentsService } = await import("@gotgenes/pi-subagents");
+let unregisterProvider: (() => void) | undefined;
+
+const unsubscribe = subscribeSubagentsService(
+  ctx.sessionManager.getSessionId(),
+  (service) => {
+    unregisterProvider?.();
+    unregisterProvider = service?.registerWorkspaceProvider(provider);
+  },
+);
+
+// On session shutdown or extension reload:
+unsubscribe();
+unregisterProvider?.();
+```
+
+The subscription callback runs synchronously with the current service, including `undefined`, and after each replacement or removal.
+The returned disposer removes only that subscription, including when the same listener function was registered more than once.
+Listener failures are isolated from registry updates and appear when `PI_SUBAGENTS_DEBUG=1`.
 Declare this package as an optional peer dependency.
 See `src/service/service.ts` for the full `SubagentsService` interface and the `WorkspaceProvider` seam.
 

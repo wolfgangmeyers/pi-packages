@@ -24,7 +24,7 @@ if grep -q '#src' "$DTS"; then
   grep -n '#src' "$DTS" >&2
   exit 1
 fi
-for sym in getSubagentsService WorkspaceProvider SubagentsService LifetimeUsage Workspace WorkspacePrepareContext WorkspaceDisposeOutcome WorkspaceDisposeResult; do
+for sym in getSubagentsService subscribeSubagentsService SubagentsServiceListener WorkspaceProvider SubagentsService LifetimeUsage Workspace WorkspacePrepareContext WorkspaceDisposeOutcome WorkspaceDisposeResult; do
   grep -q "$sym" "$DTS" || { echo "FAIL: '$sym' missing from dist/public.d.ts" >&2; exit 1; }
 done
 echo "OK: dist/public.d.ts is self-contained and exports the public surface"
@@ -65,6 +65,8 @@ JSON
 cat > "$CONSUMER/probe.ts" <<'TS'
 import {
   getSubagentsService,
+  subscribeSubagentsService,
+  type SubagentsServiceListener,
   type Workspace,
   type WorkspaceDisposeOutcome,
   type WorkspaceDisposeResult,
@@ -85,8 +87,16 @@ const provider: WorkspaceProvider = {
   },
 };
 
+const ownerSessionId = "owner-session";
+const service = getSubagentsService(ownerSessionId);
+const listener: SubagentsServiceListener = (current) => {
+  void current;
+};
+const unsubscribe = subscribeSubagentsService(ownerSessionId, listener);
+unsubscribe();
+
 void provider;
-void getSubagentsService;
+void service;
 TS
 
 cat > "$CONSUMER/probe-settings.ts" <<'TS'

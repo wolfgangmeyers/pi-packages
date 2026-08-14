@@ -9,6 +9,7 @@
  *   svc?.spawn("Explore", "Check for stale TODOs");
  */
 
+import { debugLog } from "#src/debug";
 import type { SubagentStatus } from "#src/lifecycle/subagent";
 import type { LifetimeUsage } from "#src/lifecycle/usage";
 import type {
@@ -127,7 +128,10 @@ export type SubagentsServiceListener = (service: SubagentsService | undefined) =
 
 interface SubagentsServiceRegistry {
   readonly services: Map<string, SubagentsService>;
-  readonly listeners: Map<string, Set<SubagentsServiceListener>>;
+  readonly listeners: Map<
+    string,
+    Map<symbol, SubagentsServiceListener>
+  >;
 }
 
 /**
@@ -136,6 +140,7 @@ interface SubagentsServiceRegistry {
  * Publication replaces only the service registered for `ownerSessionId` and
  * synchronously notifies that owner's subscribers. Re-publishing the same
  * object refreshes its bounded-registry recency without notifying again.
+ * Throws when the registry is full and every retained owner has subscribers.
  */
 export function publishSubagentsService(
   ownerSessionId: string,
@@ -143,10 +148,12 @@ export function publishSubagentsService(
 ): void {
   const registry = getOrCreateServiceRegistry();
   const previous = registry.services.get(ownerSessionId);
+  if (!previous && registry.services.size >= MAX_REGISTERED_SERVICES) {
+    evictOldestUnsubscribedService(registry);
+  }
   registry.services.delete(ownerSessionId);
   registry.services.set(ownerSessionId, service);
-  evictOldestServices(registry);
-  if (previous !== service && registry.services.get(ownerSessionId) === service) {
+  if (previous !== service) {
     notifyServiceListeners(registry, ownerSessionId, service);
   }
 }
@@ -183,20 +190,32 @@ export function unpublishSubagentsService(
  *
  * The listener is called synchronously with the current service (including
  * `undefined`) and after each replacement or active-service removal. Listener
- * errors are isolated. The returned function removes only this subscription.
+ * errors are isolated and available through debug logging. Every call creates
+ * a distinct registration, so the disposer removes only this subscription.
  */
 export function subscribeSubagentsService(
   ownerSessionId: string,
   listener: SubagentsServiceListener,
 ): () => void {
   const registry = getOrCreateServiceRegistry();
-  const listeners = registry.listeners.get(ownerSessionId) ?? new Set();
-  listeners.add(listener);
+  const listeners =
+    registry.listeners.get(ownerSessionId) ??
+    new Map<symbol, SubagentsServiceListener>();
+  const subscriptionId = Symbol(ownerSessionId);
+  listeners.set(subscriptionId, listener);
   registry.listeners.set(ownerSessionId, listeners);
   callServiceListener(listener, getSubagentsService(ownerSessionId));
+  let subscribed = true;
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) registry.listeners.delete(ownerSessionId);
+    if (!subscribed) return;
+    subscribed = false;
+    listeners.delete(subscriptionId);
+    if (
+      listeners.size === 0 &&
+      registry.listeners.get(ownerSessionId) === listeners
+    ) {
+      registry.listeners.delete(ownerSessionId);
+    }
     deleteRegistryWhenEmpty(registry);
   };
 }
@@ -218,13 +237,17 @@ function getOrCreateServiceRegistry(): SubagentsServiceRegistry {
   return registry;
 }
 
-function evictOldestServices(registry: SubagentsServiceRegistry): void {
-  while (registry.services.size > MAX_REGISTERED_SERVICES) {
-    const oldestOwnerSessionId = registry.services.keys().next().value;
-    if (oldestOwnerSessionId === undefined) return;
-    registry.services.delete(oldestOwnerSessionId);
-    notifyServiceListeners(registry, oldestOwnerSessionId, undefined);
+function evictOldestUnsubscribedService(
+  registry: SubagentsServiceRegistry,
+): void {
+  for (const ownerSessionId of registry.services.keys()) {
+    if ((registry.listeners.get(ownerSessionId)?.size ?? 0) > 0) continue;
+    registry.services.delete(ownerSessionId);
+    return;
   }
+  throw new Error(
+    `Cannot publish SubagentsService: all ${MAX_REGISTERED_SERVICES} retained owners have active subscribers`,
+  );
 }
 
 function notifyServiceListeners(
@@ -232,7 +255,16 @@ function notifyServiceListeners(
   ownerSessionId: string,
   service: SubagentsService | undefined,
 ): void {
-  for (const listener of registry.listeners.get(ownerSessionId) ?? []) {
+  const subscriptions = [
+    ...(registry.listeners.get(ownerSessionId)?.entries() ?? []),
+  ];
+  for (const [subscriptionId, listener] of subscriptions) {
+    if (registry.services.get(ownerSessionId) !== service) return;
+    if (
+      registry.listeners.get(ownerSessionId)?.get(subscriptionId) !== listener
+    ) {
+      continue;
+    }
     callServiceListener(listener, service);
   }
 }
@@ -243,8 +275,9 @@ function callServiceListener(
 ): void {
   try {
     listener(service);
-  } catch {
+  } catch (error) {
     // One extension's listener must not block registry publication or cleanup.
+    debugLog("SubagentsService listener", error);
   }
 }
 

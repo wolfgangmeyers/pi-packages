@@ -8,7 +8,12 @@ import {
   OwnerScopedServiceRegistration,
   SessionLifecycleHandler,
 } from "#src/handlers/lifecycle";
-import type { SubagentsService } from "#src/service/service";
+import {
+  getSubagentsService,
+  publishSubagentsService,
+  type SubagentsService,
+  unpublishSubagentsService,
+} from "#src/service/service";
 
 function makeContext(sessionId = "owner-session") {
   return {
@@ -47,7 +52,52 @@ describe("OwnerScopedServiceRegistration", () => {
       ],
     });
   });
+
+  it("session shutdown removes only its owner's real registry entry", async () => {
+    const parentService = makeService();
+    const childService = makeService();
+    const parentHandler = makeLifecycleHandler(parentService);
+    const childHandler = makeLifecycleHandler(childService);
+
+    parentHandler.handleSessionStart({}, makeContext("parent-session"));
+    childHandler.handleSessionStart({}, makeContext("child-session"));
+    await parentHandler.handleSessionShutdown();
+
+    expect({
+      parent: getSubagentsService("parent-session"),
+      child: getSubagentsService("child-session"),
+    }).toEqual({ parent: undefined, child: childService });
+
+    await childHandler.handleSessionShutdown();
+  });
 });
+
+function makeService(): SubagentsService {
+  return {
+    spawn: () => "agent-id",
+    getRecord: () => undefined,
+    listAgents: () => [],
+    abort: () => false,
+    steer: () => Promise.resolve(false),
+    hasRunning: () => false,
+    subscribeLifecycle: () => () => undefined,
+    getLifecycleSnapshots: () => [],
+    registerWorkspaceProvider: () => () => undefined,
+  };
+}
+
+function makeLifecycleHandler(service: SubagentsService): SessionLifecycleHandler {
+  return new SessionLifecycleHandler(
+    { setSessionContext: () => undefined, clearSessionContext: () => undefined },
+    { clearCompleted: () => undefined, abortAll: () => undefined, dispose: () => undefined },
+    () => undefined,
+    new OwnerScopedServiceRegistration(
+      service,
+      publishSubagentsService,
+      unpublishSubagentsService,
+    ),
+  );
+}
 
 describe("SessionLifecycleHandler", () => {
   let runtime: LifecycleRuntime;

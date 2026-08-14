@@ -72,6 +72,7 @@ export interface ChildLifecyclePublisher {
 /** Build a publisher backed by an injected `emit` callback. */
 export function createChildLifecyclePublisher(
   emit: LifecycleEmit,
+  onDisposed?: (event: ChildDisposedEvent) => void,
 ): ChildLifecyclePublisher {
   return {
     spawning(event) {
@@ -84,7 +85,11 @@ export function createChildLifecyclePublisher(
       emit(SUBAGENT_CHILD_COMPLETED, event);
     },
     disposed(event) {
-      emit(SUBAGENT_CHILD_DISPOSED, event);
+      try {
+        emit(SUBAGENT_CHILD_DISPOSED, event);
+      } finally {
+        onDisposed?.(event);
+      }
     },
   };
 }

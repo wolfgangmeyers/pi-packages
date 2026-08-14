@@ -9,8 +9,9 @@ Worktrees are one *workspace strategy*, not core behavior — so the git plumbin
 
 ## Install
 
-Install **after** `@gotgenes/pi-subagents`.
-Pi loads packages in the order they are listed in `.pi/settings.json`, and this extension registers its provider with the subagents service at load time — so the subagents core must load first.
+Install this package with `@gotgenes/pi-subagents` 20 or newer.
+The extension subscribes to the current Pi session's subagents service, so package load order does not affect provider registration.
+It also rebinds the provider if the core service is published or replaced after session start.
 
 ```json
 {
@@ -21,7 +22,7 @@ Pi loads packages in the order they are listed in `.pi/settings.json`, and this 
 }
 ```
 
-If `@gotgenes/pi-subagents` is not loaded first (or not installed at all), this extension does nothing.
+`@gotgenes/pi-subagents` is a required peer dependency.
 
 ## Configuration
 

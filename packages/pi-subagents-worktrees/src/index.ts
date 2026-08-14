@@ -6,24 +6,34 @@
  * every child run; this package decides which agents get a worktree (via the
  * worktreeAgents config) and brackets the run with git plumbing.
  *
- * The provider is registered once at extension init via the published
- * SubagentsService, which requires @gotgenes/pi-subagents to have initialized
- * first — list this package after it in settings.json (Pi loads in order). If
- * the service is absent (not installed, or mis-ordered), the extension no-ops.
+ * The provider subscribes to the owner-scoped SubagentsService at session
+ * start. This handles either package load order and rebinds when the owning
+ * service is published or replaced.
  */
 
 import {
   type ExtensionAPI,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { getSubagentsService } from "@gotgenes/pi-subagents";
+import type { SubagentsService } from "@gotgenes/pi-subagents";
+import * as subagentsPackage from "@gotgenes/pi-subagents";
 import { ActiveWorktrees } from "#src/active-worktrees";
 import { loadWorktreesConfig } from "#src/config";
-import { debugLog } from "#src/debug";
 import { findPreservedWorktrees, formatPreservedNotice } from "#src/preserved";
 import { registerPreservedWorktreesCommand } from "#src/preserved-command";
 import { WorktreeWorkspaceProvider } from "#src/workspace-provider";
 import { discardWorktree, pruneWorktrees } from "#src/worktree";
+
+type SubscribeSubagentsService = (
+  ownerSessionId: string,
+  listener: (service: SubagentsService | undefined) => void,
+) => () => void;
+
+const subscribeSubagentsService = (
+  subagentsPackage as typeof subagentsPackage & {
+    subscribeSubagentsService: SubscribeSubagentsService;
+  }
+).subscribeSubagentsService;
 
 export default function piSubagentsWorktrees(pi: ExtensionAPI): void {
   const config = loadWorktreesConfig(getAgentDir(), process.cwd());
@@ -31,19 +41,23 @@ export default function piSubagentsWorktrees(pi: ExtensionAPI): void {
   // Best-effort crash recovery: clear worktrees orphaned by a prior crash.
   pruneWorktrees(process.cwd());
 
-  const service = getSubagentsService();
-  if (!service) {
-    debugLog(
-      "subagents service unavailable — worktree provider not registered",
-      undefined,
-    );
-    return;
-  }
-
   const live = new ActiveWorktrees();
-  const unregister = service.registerWorkspaceProvider(
-    new WorktreeWorkspaceProvider(config, live),
-  );
+  const provider = new WorktreeWorkspaceProvider(config, live);
+  let unsubscribeService: (() => void) | undefined;
+  let unregisterProvider: (() => void) | undefined;
+  let serviceWasPublished = false;
+
+  const clearProvider = (): void => {
+    unregisterProvider?.();
+    unregisterProvider = undefined;
+  };
+  const clearSessionBinding = (): void => {
+    unsubscribeService?.();
+    unsubscribeService = undefined;
+    serviceWasPublished = false;
+    clearProvider();
+  };
+
   const repoCwd = process.cwd();
   const findPreserved = () => findPreservedWorktrees(repoCwd, live);
 
@@ -51,6 +65,34 @@ export default function piSubagentsWorktrees(pi: ExtensionAPI): void {
   // session start. A session with no UI (every subagent child) has nowhere to
   // show them, so it does not even look.
   pi.on("session_start", (_event, ctx) => {
+    clearSessionBinding();
+    const subscriptionState = {
+      ready: false,
+      removeWhenReady: false,
+    };
+    const unsubscribe = subscribeSubagentsService(
+      ctx.sessionManager.getSessionId(),
+      (service) => {
+        clearProvider();
+        if (!service) {
+          if (serviceWasPublished) {
+            if (subscriptionState.ready) {
+              unsubscribeService?.();
+              unsubscribeService = undefined;
+            } else {
+              subscriptionState.removeWhenReady = true;
+            }
+          }
+          return;
+        }
+        serviceWasPublished = true;
+        unregisterProvider = service.registerWorkspaceProvider(provider);
+      },
+    );
+    subscriptionState.ready = true;
+    if (subscriptionState.removeWhenReady) unsubscribe();
+    else unsubscribeService = unsubscribe;
+
     if (!ctx.hasUI) return;
     const preserved = findPreserved();
     if (preserved.length > 0) {
@@ -63,5 +105,5 @@ export default function piSubagentsWorktrees(pi: ExtensionAPI): void {
     discard: (path) => discardWorktree(repoCwd, path),
   });
 
-  pi.on("session_shutdown", () => unregister());
+  pi.on("session_shutdown", clearSessionBinding);
 }

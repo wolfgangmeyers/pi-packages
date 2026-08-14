@@ -32,6 +32,7 @@ import { type NotificationDetails, NotificationManager } from "#src/observation/
 import { createNotificationRenderer } from "#src/observation/renderer";
 import { SubagentEventsObserver } from "#src/observation/subagent-events-observer";
 import { createSubagentRuntime } from "#src/runtime";
+import { unpublishCurrentSubagentsService } from "#src/service/owner-service-cleanup";
 import { publishSubagentsService, unpublishSubagentsService } from "#src/service/service";
 import { SubagentsServiceAdapter } from "#src/service/service-adapter";
 import { detectEnv } from "#src/session/env";
@@ -109,7 +110,10 @@ export default function (pi: ExtensionAPI) {
     },
     exec: (cmd, args, opts) => pi.exec(cmd, args, opts),
     registry,
-    lifecycle: createChildLifecyclePublisher((channel, data) => pi.events.emit(channel, data)),
+    lifecycle: createChildLifecyclePublisher(
+      (channel, data) => pi.events.emit(channel, data),
+      ({ sessionId }) => unpublishCurrentSubagentsService(sessionId),
+    ),
   };
 
   // ConcurrencyLimiter: schedules background run thunks FIFO against the limit.
