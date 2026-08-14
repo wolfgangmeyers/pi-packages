@@ -3,8 +3,6 @@
     "../packages/pi-colgrep/",
     "../packages/pi-github-tools",
     "../packages/pi-autoformat",
-    "../packages/pi-permission-system",
-    "../packages/pi-permission-model-judge",
     "../packages/pi-subagents",
     "../packages/pi-subagents-worktrees",
     "../packages/pi-session-tools",
@@ -17,11 +15,6 @@
       "skills": []
     },
     { "source": "npm:@gotgenes/pi-autoformat", "extensions": [], "skills": [] },
-    {
-      "source": "npm:@gotgenes/pi-permission-system",
-      "extensions": [],
-      "skills": []
-    },
     { "source": "npm:@gotgenes/pi-subagents", "extensions": [], "skills": [] },
     {
       "source": "npm:@gotgenes/pi-session-tools",
