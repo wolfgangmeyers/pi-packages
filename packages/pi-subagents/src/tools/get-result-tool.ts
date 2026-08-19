@@ -17,26 +17,62 @@ export interface GetResultToolManager {
 	getRecord(id: string): Subagent | undefined;
 }
 
+interface GetResultToolContext {
+	readonly sessionManager: {
+		getSessionId(): string;
+	};
+}
+
+interface GetResultToolOptions {
+	readonly now?: () => number;
+}
+
+const INCOMPLETE_READ_LIMIT = 3;
+const INCOMPLETE_READ_WINDOW_MS = 60_000;
+const INCOMPLETE_READ_ERROR =
+	"Polling burns extra tokens and is unacceptable. Wait for completion; do not poll again.";
+
 // ---- Class ----
 
 export class GetResultTool {
+	private readonly now: () => number;
+	private readonly incompleteReads = new Map<string, Map<string, number[]>>();
+
 	constructor(
 		private readonly manager: GetResultToolManager,
 		private readonly registry: AgentConfigLookup,
-	) {}
+		options: GetResultToolOptions = {},
+	) {
+		this.now = options.now ?? Date.now;
+	}
 
 	execute(
 		_toolCallId: string,
 		params: { agent_id: string; verbose?: boolean },
 		_signal: AbortSignal,
 		_onUpdate: unknown,
-		_ctx: unknown,
+		ctx: unknown,
 	) {
 		const record = this.manager.getRecord(params.agent_id);
 		if (!record) {
 			return Promise.resolve(
 				textResult(`Agent not found: "${params.agent_id}". Records are cleared at session start/switch, so it may be from a previous session.`),
 			);
+		}
+
+		if (record.status === "queued" || record.status === "running") {
+			const now = this.now();
+			this.pruneIncompleteReads(now);
+			const callerId = getCallerId(ctx);
+			const callerReads = this.incompleteReads.get(callerId);
+			const recentReads = callerReads?.get(params.agent_id) ?? [];
+			if (recentReads.length >= INCOMPLETE_READ_LIMIT) {
+				return Promise.resolve(textResult(INCOMPLETE_READ_ERROR));
+			}
+			recentReads.push(now);
+			const readsByTarget = callerReads ?? new Map<string, number[]>();
+			readsByTarget.set(params.agent_id, recentReads);
+			this.incompleteReads.set(callerId, readsByTarget);
 		}
 
 		const report = this.buildReport(record, params.verbose);
@@ -47,6 +83,23 @@ export class GetResultTool {
 					: formatAgentReport(report),
 			),
 		);
+	}
+
+	private pruneIncompleteReads(now: number): void {
+		const cutoff = now - INCOMPLETE_READ_WINDOW_MS;
+		for (const [callerId, readsByTarget] of this.incompleteReads) {
+			for (const [targetId, timestamps] of readsByTarget) {
+				const recentReads = timestamps.filter((timestamp) => timestamp > cutoff);
+				if (recentReads.length === 0) {
+					readsByTarget.delete(targetId);
+				} else {
+					readsByTarget.set(targetId, recentReads);
+				}
+			}
+			if (readsByTarget.size === 0) {
+				this.incompleteReads.delete(callerId);
+			}
+		}
 	}
 
 	private buildReport(record: Subagent, verbose?: boolean): AgentReport {
@@ -113,6 +166,10 @@ export class GetResultTool {
 			) => this.execute(toolCallId, params, signal, onUpdate, ctx),
 		});
 	}
+}
+
+function getCallerId(ctx: unknown): string {
+	return (ctx as GetResultToolContext).sessionManager.getSessionId();
 }
 
 function formatRunningAgentReport(report: AgentReport): string {

@@ -4,22 +4,37 @@ import { GetResultTool, type GetResultToolManager } from "#src/tools/get-result-
 import type { Subagent } from "#src/types";
 import { createTestSubagent } from "#test/helpers/make-subagent";
 import { createMockSession, createSubagentSessionStub, toSubagentSession } from "#test/helpers/mock-session";
-import { STUB_CTX } from "#test/helpers/stub-ctx";
 
 const RUNNING_HINT = "Do not poll. Continue other work; you will be notified when this subagent finishes.";
+const LIMIT_ERROR = "Polling burns extra tokens and is unacceptable. Wait for completion; do not poll again.";
 const testRegistry = new AgentTypeRegistry(() => new Map());
+type TestContext = { sessionManager: { getSessionId(): string } };
 
 function makeManager(records: Map<string, Subagent> = new Map()): GetResultToolManager {
 	return { getRecord: (id: string) => records.get(id) };
 }
 
+function makeContext(sessionId = "caller-1"): TestContext {
+	return { sessionManager: { getSessionId: () => sessionId } };
+}
+
 async function execute(
 	manager: GetResultToolManager,
 	params: { agent_id: string; verbose?: boolean },
-	signal: AbortSignal = new AbortController().signal,
+	options: {
+		tool?: GetResultTool;
+		context?: TestContext;
+		signal?: AbortSignal;
+	} = {},
 ) {
-	const tool = new GetResultTool(manager, testRegistry);
-	return tool.execute("tc-1", params, signal, undefined, STUB_CTX);
+	const tool = options.tool ?? new GetResultTool(manager, testRegistry);
+	return tool.execute(
+		"tc-1",
+		params,
+		options.signal ?? new AbortController().signal,
+		undefined,
+		options.context ?? makeContext(),
+	);
 }
 
 describe("GetResultTool — public dispatch contract", () => {
@@ -49,6 +64,86 @@ describe("GetResultTool — nonblocking snapshots", () => {
 		const result = await execute(makeManager(), { agent_id: "unknown" });
 		expect(result.content[0].text).toContain("Agent not found");
 		expect(result.content[0].text).not.toContain(RUNNING_HINT);
+	});
+
+	it("allows three incomplete reads and rejects the fourth within 60 seconds", async () => {
+		let now = 100_000;
+		const record = createTestSubagent({ status: "queued", completedAt: undefined });
+		const manager = makeManager(new Map([["agent-1", record]]));
+		const tool = new GetResultTool(manager, testRegistry, { now: () => now });
+
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const result = await execute(manager, { agent_id: "agent-1" }, { tool });
+			expect(result.content[0].text).toContain("Status: queued");
+		}
+
+		const rejected = await execute(manager, { agent_id: "agent-1" }, { tool });
+		expect(rejected.content[0].text).toBe(LIMIT_ERROR);
+
+		now += 60_001;
+		const afterWindow = await execute(manager, { agent_id: "agent-1" }, { tool });
+		expect(afterWindow.content[0].text).toContain("Status: queued");
+	});
+
+	it("isolates limits by caller and target", async () => {
+		const now = 100_000;
+		const records = new Map([
+			["agent-1", createTestSubagent({ status: "running", completedAt: undefined })],
+			["agent-2", createTestSubagent({ id: "agent-2", status: "running", completedAt: undefined })],
+		]);
+		const manager = makeManager(records);
+		const tool = new GetResultTool(manager, testRegistry, { now: () => now });
+		const callerA = makeContext("caller-a");
+		const callerB = makeContext("caller-b");
+
+		for (let attempt = 0; attempt < 3; attempt++) {
+			await execute(manager, { agent_id: "agent-1" }, { tool, context: callerA });
+		}
+		expect((await execute(manager, { agent_id: "agent-1" }, { tool, context: callerA })).content[0].text).toBe(LIMIT_ERROR);
+		expect((await execute(manager, { agent_id: "agent-2" }, { tool, context: callerA })).content[0].text).toContain("Status: running");
+		expect((await execute(manager, { agent_id: "agent-1" }, { tool, context: callerB })).content[0].text).toContain("Status: running");
+	});
+
+	it("keeps allowance isolated between tool instances", async () => {
+		const now = 100_000;
+		const record = createTestSubagent({ status: "running", completedAt: undefined });
+		const manager = makeManager(new Map([["agent-1", record]]));
+		const firstTool = new GetResultTool(manager, testRegistry, { now: () => now });
+		const secondTool = new GetResultTool(manager, testRegistry, { now: () => now });
+
+		for (let attempt = 0; attempt < 3; attempt++) {
+			await execute(manager, { agent_id: "agent-1" }, { tool: firstTool });
+		}
+		expect((await execute(manager, { agent_id: "agent-1" }, { tool: firstTool })).content[0].text).toBe(LIMIT_ERROR);
+		expect((await execute(manager, { agent_id: "agent-1" }, { tool: secondTool })).content[0].text).toContain("Status: running");
+	});
+
+	it("does not count unknown IDs", async () => {
+		const now = 100_000;
+		const record = createTestSubagent({ status: "queued", completedAt: undefined });
+		const manager = makeManager(new Map([["agent-1", record]]));
+		const tool = new GetResultTool(manager, testRegistry, { now: () => now });
+		for (let attempt = 0; attempt < 4; attempt++) {
+			const result = await execute(manager, { agent_id: "unknown" }, { tool });
+			expect(result.content[0].text).toContain("Agent not found");
+		}
+		expect((await execute(manager, { agent_id: "agent-1" }, { tool })).content[0].text).toContain("Status: queued");
+	});
+
+	it("bypasses the limit for terminal statuses", async () => {
+		let now = 100_000;
+		for (const status of ["completed", "error", "stopped", "aborted", "steered"] as const) {
+			const record = createTestSubagent({ status, completedAt: 2_000 });
+			const manager = makeManager(new Map([["agent-1", record]]));
+			const tool = new GetResultTool(manager, testRegistry, { now: () => now });
+			for (let attempt = 0; attempt < 4; attempt++) {
+				const result = await execute(manager, { agent_id: "agent-1" }, { tool });
+				const text = result.content[0].text;
+				expect(text).not.toBe(LIMIT_ERROR);
+				expect(text).toContain(`Status: ${status}`);
+			}
+			now++;
+		}
 	});
 
 	it("returns the current completed result without consuming it", async () => {
