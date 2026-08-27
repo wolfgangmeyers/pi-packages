@@ -28,11 +28,11 @@ describe("createChildLifecyclePublisher", () => {
   it("emits subagents:child:spawning with the agent identity", () => {
     const { emit, publisher } = setup();
 
-    publisher.spawning({ agentName: "Explore", parentSessionId: "parent-42" });
+    publisher.spawning({ agentName: "Plan", parentSessionId: "parent-42" });
 
     expect(emit).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledWith(SUBAGENT_CHILD_SPAWNING, {
-      agentName: "Explore",
+      agentName: "Plan",
       parentSessionId: "parent-42",
     });
   });
@@ -57,7 +57,7 @@ describe("createChildLifecyclePublisher", () => {
 
     publisher.completed({
       sessionDir: "/sessions/child-abc",
-      agentName: "Explore",
+      agentName: "Plan",
       aborted: false,
       steered: true,
     });
@@ -65,7 +65,7 @@ describe("createChildLifecyclePublisher", () => {
     expect(emit).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenCalledWith(SUBAGENT_CHILD_COMPLETED, {
       sessionDir: "/sessions/child-abc",
-      agentName: "Explore",
+      agentName: "Plan",
       aborted: false,
       steered: true,
     });

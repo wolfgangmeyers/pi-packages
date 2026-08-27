@@ -13,13 +13,13 @@ import {
 const SERVICE_REGISTRY_KEY = Symbol.for("@gotgenes/pi-subagents:service-registry");
 
 const PARENT_LIFECYCLE_SNAPSHOTS: readonly SubagentLifecycleSnapshot[] = [
-  { id: "completed-1", type: "Explore", description: "completed one", status: "completed" },
-  { id: "completed-2", type: "Explore", description: "completed two", status: "completed" },
-  { id: "completed-3", type: "Explore", description: "completed three", status: "completed" },
-  { id: "running-1", type: "Explore", description: "running one", status: "running" },
-  { id: "running-2", type: "Explore", description: "running two", status: "running" },
-  { id: "running-3", type: "Explore", description: "running three", status: "running" },
-  { id: "running-4", type: "Explore", description: "running four", status: "running" },
+  { id: "completed-1", type: "Plan", description: "completed one", status: "completed" },
+  { id: "completed-2", type: "Plan", description: "completed two", status: "completed" },
+  { id: "completed-3", type: "Plan", description: "completed three", status: "completed" },
+  { id: "running-1", type: "Plan", description: "running one", status: "running" },
+  { id: "running-2", type: "Plan", description: "running two", status: "running" },
+  { id: "running-3", type: "Plan", description: "running three", status: "running" },
+  { id: "running-4", type: "Plan", description: "running four", status: "running" },
 ];
 
 function makeService(

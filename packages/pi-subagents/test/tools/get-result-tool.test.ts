@@ -5,8 +5,9 @@ import type { Subagent } from "#src/types";
 import { createTestSubagent } from "#test/helpers/make-subagent";
 import { createMockSession, createSubagentSessionStub, toSubagentSession } from "#test/helpers/mock-session";
 
-const RUNNING_HINT = "Do not poll. Continue other work; you will be notified when this subagent finishes.";
-const LIMIT_ERROR = "Polling burns extra tokens and is unacceptable. Wait for completion; do not poll again.";
+const RUNNING_HINT =
+	"**MANDATORY**!!! This is a snapshot only. Do NOT repeatedly pull a running result!!! The full context must be sent back to the model on every call, so repeated pulls burn tokens very quickly. Rest and wait for completion; a completion notification will arrive automatically. Checking early is appropriate only when you were explicitly told to check early.";
+const LIMIT_ERROR = RUNNING_HINT;
 const testRegistry = new AgentTypeRegistry(() => new Map());
 type TestContext = { sessionManager: { getSessionId(): string } };
 
@@ -41,18 +42,16 @@ describe("GetResultTool — public dispatch contract", () => {
 	it("returns the snapshot-only tool definition", () => {
 		const def = new GetResultTool(makeManager(), testRegistry).toToolDefinition();
 		expect(def.name).toBe("get_subagent_result");
-		expect(def.promptSnippet).toBe(
-			"get_subagent_result: Get a nonblocking snapshot. Running agents notify automatically, so polling wastes work and tokens.",
-		);
-		expect(def.description).toContain("Continue other work instead.");
+		expect(def.promptSnippet).toBe(`get_subagent_result: ${RUNNING_HINT}`);
+		expect(def.description).toBe(RUNNING_HINT);
 		expect(def.parameters.additionalProperties).toBe(false);
 		expect(def.parameters.properties).not.toHaveProperty("wait");
 	});
 
 	it.each([
-		[true, 'Unsupported argument "wait": true. Result retrieval is snapshot-only; running agents notify automatically.'],
-		[false, 'Unsupported argument "wait": false. Result retrieval is snapshot-only; running agents notify automatically.'],
-		["later", 'Unsupported argument "wait": "later". Result retrieval is snapshot-only; running agents notify automatically.'],
+		[true, `Unsupported argument "wait": true. Result retrieval is snapshot-only.\n\n${RUNNING_HINT}`],
+		[false, `Unsupported argument "wait": false. Result retrieval is snapshot-only.\n\n${RUNNING_HINT}`],
+		["later", `Unsupported argument "wait": "later". Result retrieval is snapshot-only.\n\n${RUNNING_HINT}`],
 	])("rejects stale wait=%j in prepareArguments", (value, message) => {
 		const def = new GetResultTool(makeManager(), testRegistry).toToolDefinition();
 		expect(() => def.prepareArguments?.({ agent_id: "agent-1", wait: value })).toThrow(message);

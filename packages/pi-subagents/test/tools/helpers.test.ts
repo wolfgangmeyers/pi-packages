@@ -99,11 +99,11 @@ describe("buildTypeListText", () => {
 
   it("includes model suffix for default agents that have a model set", () => {
     const registry = makeRegistry({
-      defaults: ["Explore"],
-      resolve: () => ({ description: "Fast explorer", model: "anthropic/claude-haiku-4-5" }),
+      defaults: ["Plan"],
+      resolve: () => ({ description: "Planning agent", model: "anthropic/claude-haiku-4-5" }),
     });
     const result = buildTypeListText(registry, "/home/.pi");
-    expect(result).toContain("- Explore: Fast explorer (claude-haiku-4-5)");
+    expect(result).toContain("- Plan: Planning agent (claude-haiku-4-5)");
   });
 
   it("includes agentDir in the trailing hint line", () => {
@@ -175,7 +175,7 @@ describe("buildTypeListText", () => {
 describe("buildAgentGuidelines", () => {
   it("returns the enabled default agents' guideline lines in registry order", () => {
     const registry = makeRegistry({
-      defaults: ["general-purpose", "Explore", "Plan"],
+      defaults: ["general-purpose", "Plan"],
       resolve: (name) => ({
         description: `${name} agent`,
         model: undefined,
@@ -184,18 +184,17 @@ describe("buildAgentGuidelines", () => {
     });
     expect(buildAgentGuidelines(registry)).toEqual([
       "- Use general-purpose for stuff.",
-      "- Use Explore for stuff.",
       "- Use Plan for stuff.",
     ]);
   });
 
   it("omits a disabled default agent's guideline line", () => {
     const registry = makeRegistry({
-      defaults: ["general-purpose", "Explore"],
+      defaults: ["general-purpose", "Plan"],
       resolve: (name) => ({
         description: `${name} agent`,
         model: undefined,
-        enabled: name === "Explore" ? false : undefined,
+        enabled: name === "Plan" ? false : undefined,
         toolGuideline: `- Use ${name} for stuff.`,
       }),
     });
@@ -216,7 +215,7 @@ describe("buildAgentGuidelines", () => {
 
   it("returns an empty array when all default agents are disabled", () => {
     const registry = makeRegistry({
-      defaults: ["general-purpose", "Explore"],
+      defaults: ["general-purpose", "Plan"],
       resolve: (name) => ({
         description: `${name} agent`,
         model: undefined,

@@ -160,7 +160,7 @@ describe("buildNotificationDetails", () => {
 
 describe("buildEventData", () => {
   const baseRecord = createTestSubagent({
-    type: "Explore",
+    type: "Plan",
     description: "Search files",
     result: "Found 3 files",
     toolUses: 5,
@@ -171,7 +171,7 @@ describe("buildEventData", () => {
     const data = buildEventData(baseRecord);
     expect(data).toEqual({
       id: "agent-1",
-      type: "Explore",
+      type: "Plan",
       description: "Search files",
       result: "Found 3 files",
       error: undefined,
@@ -183,7 +183,7 @@ describe("buildEventData", () => {
   });
 
   it("omits tokens when total is zero", () => {
-    const record = createTestSubagent({ type: "Explore", description: "Search files", result: "Found 3 files", toolUses: 5, lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 } });
+    const record = createTestSubagent({ type: "Plan", description: "Search files", result: "Found 3 files", toolUses: 5, lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 } });
     const data = buildEventData(record);
     expect(data.tokens).toBeUndefined();
   });
@@ -191,7 +191,7 @@ describe("buildEventData", () => {
   it("uses Date.now() fallback when completedAt is undefined", () => {
     vi.useFakeTimers();
     vi.setSystemTime(5000);
-    const record = createTestSubagent({ type: "Explore", description: "Search files", result: "Found 3 files", toolUses: 5, lifetimeUsage: { input: 1000, output: 500, cacheWrite: 0 }, completedAt: undefined });
+    const record = createTestSubagent({ type: "Plan", description: "Search files", result: "Found 3 files", toolUses: 5, lifetimeUsage: { input: 1000, output: 500, cacheWrite: 0 }, completedAt: undefined });
     const data = buildEventData(record);
     expect(data.durationMs).toBe(4000); // 5000 - 1000
     vi.useRealTimers();

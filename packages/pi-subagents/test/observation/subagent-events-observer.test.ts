@@ -83,7 +83,7 @@ describe("SubagentEventsObserver", () => {
 			const { observer, appendEntry } = makeObserver();
 			const record = createTestSubagent({
 				id: "agent-2",
-				type: "Explore",
+				type: "Plan",
 				description: "explore code",
 				status: "completed",
 				result: "found it",
@@ -96,7 +96,7 @@ describe("SubagentEventsObserver", () => {
 
 			expect(appendEntry).toHaveBeenCalledExactlyOnceWith("subagents:record", {
 				id: "agent-2",
-				type: "Explore",
+				type: "Plan",
 				description: "explore code",
 				status: "completed",
 				result: "found it",
@@ -147,7 +147,7 @@ describe("SubagentEventsObserver", () => {
 			const { observer, appendEntry } = makeObserver();
 			const record = createTestSubagent({
 				id: "agent-5",
-				type: "Explore",
+				type: "Plan",
 				description: "resume explore",
 				status: "completed",
 				result: "resumed it",
@@ -160,7 +160,7 @@ describe("SubagentEventsObserver", () => {
 
 			expect(appendEntry).toHaveBeenCalledExactlyOnceWith("subagents:record", {
 				id: "agent-5",
-				type: "Explore",
+				type: "Plan",
 				description: "resume explore",
 				status: "completed",
 				result: "resumed it",

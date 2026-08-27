@@ -62,22 +62,22 @@ describe("createSubagentSessionIO", () => {
 });
 
 describe("createAgentLookup", () => {
-	it("resolveAgentConfig returns the default Explore config", () => {
+	it("resolveAgentConfig returns the default Plan config", () => {
 		const lookup = createAgentLookup();
-		const config = lookup.resolveAgentConfig("Explore");
-		expect(config.name).toBe("Explore");
+		const config = lookup.resolveAgentConfig("Plan");
+		expect(config.name).toBe("Plan");
 		expect(config.promptMode).toBe("replace");
 	});
 
 	it("default config builtinToolNames includes 'read'", () => {
 		const lookup = createAgentLookup();
-		const config = lookup.resolveAgentConfig("Explore");
+		const config = lookup.resolveAgentConfig("Plan");
 		expect(config.builtinToolNames).toContain("read");
 	});
 
 	it("getToolNamesForType returns ['read'] by default", () => {
 		const lookup = createAgentLookup();
-		expect(lookup.getToolNamesForType("Explore")).toEqual(["read"]);
+		expect(lookup.getToolNamesForType("Plan")).toEqual(["read"]);
 	});
 
 	it("accepts a partial config override", () => {

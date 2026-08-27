@@ -6,7 +6,7 @@
  *
  *   const { getSubagentsService } = await import("@gotgenes/pi-subagents");
  *   const svc = getSubagentsService(ctx.sessionManager.getSessionId());
- *   svc?.spawn("Explore", "Check for stale TODOs");
+ *   svc?.spawn("Plan", "Check for stale TODOs");
  */
 
 import { debugLog } from "#src/debug";

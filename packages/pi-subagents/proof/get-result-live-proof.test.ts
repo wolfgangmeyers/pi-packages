@@ -11,11 +11,11 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import subagentsExtension from "#src/index";
 import { getSubagentsService } from "#src/service/service";
+import { RUNNING_RESULT_GUIDANCE } from "#src/tools/get-result-report";
 
 // Run explicitly: cd packages/pi-subagents && cfg=$(mktemp --suffix=.ts --tmpdir=.) && trap 'rm -f "$cfg"' EXIT && printf '%s\n' 'import config from "./vitest.config.ts"; export default { ...config, test: { ...config.test, include: ["proof/get-result-live-proof.test.ts"] } };' > "$cfg" && pnpm vitest run --config "$cfg"
 
-const LIMIT_ERROR =
-  "Polling burns extra tokens and is unacceptable. Wait for completion; do not poll again.";
+const LIMIT_ERROR = RUNNING_RESULT_GUIDANCE;
 
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) => {
   const text = result.content.find((item) => item.type === "text")?.text;

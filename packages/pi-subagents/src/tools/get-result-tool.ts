@@ -5,6 +5,7 @@ import type { AgentConfigLookup } from "#src/config/agent-types";
 import {
 	type AgentReport,
 	formatAgentReport,
+	RUNNING_RESULT_GUIDANCE,
 	renderStatsParts,
 } from "#src/tools/get-result-report";
 import { formatLifetimeTokens, textResult } from "#src/tools/helpers";
@@ -29,8 +30,7 @@ interface GetResultToolOptions {
 
 const INCOMPLETE_READ_LIMIT = 3;
 const INCOMPLETE_READ_WINDOW_MS = 60_000;
-const INCOMPLETE_READ_ERROR =
-	"Polling burns extra tokens and is unacceptable. Wait for completion; do not poll again.";
+const INCOMPLETE_READ_ERROR = RUNNING_RESULT_GUIDANCE;
 
 // ---- Class ----
 
@@ -142,15 +142,13 @@ export class GetResultTool {
 		return defineTool({
 			name: "get_subagent_result" as const,
 			label: "Get Agent Result",
-			promptSnippet:
-				"get_subagent_result: Get a nonblocking snapshot. Running agents notify automatically, so polling wastes work and tokens.",
-			description:
-				"Get a nonblocking status/result snapshot for a background agent. Running agents notify automatically when they finish; do not poll because polling wastes work and tokens. Continue other work instead.",
+			promptSnippet: `get_subagent_result: ${RUNNING_RESULT_GUIDANCE}`,
+			description: RUNNING_RESULT_GUIDANCE,
 			prepareArguments: (args: unknown) => {
 				if (args && typeof args === "object" && "wait" in args) {
 					const value = args.wait;
 					throw new Error(
-						`Unsupported argument "wait": ${JSON.stringify(value)}. Result retrieval is snapshot-only; running agents notify automatically.`,
+						`Unsupported argument "wait": ${JSON.stringify(value)}. Result retrieval is snapshot-only.\n\n${RUNNING_RESULT_GUIDANCE}`,
 					);
 				}
 				Value.Assert(parameters, args);
@@ -177,7 +175,7 @@ function formatRunningAgentReport(report: AgentReport): string {
 		`Agent: ${report.id}\n` +
 		`Type: ${report.displayName} | Status: ${report.status} | ${renderStatsParts(report).join(" | ")}\n` +
 		`Description: ${report.description}\n\n` +
-		"Do not poll. Continue other work; you will be notified when this subagent finishes.";
+		RUNNING_RESULT_GUIDANCE;
 	if (report.conversation) {
 		output += `\n\n--- Agent Conversation ---\n${report.conversation}`;
 	}

@@ -56,9 +56,9 @@ function makeReadySubagent(): { agent: Subagent } {
 
 describe("Subagent — constructor", () => {
 	it("sets required fields from init", () => {
-		const record = makeSubagent({ id: "abc-123", type: "Explore", description: "Find stale TODOs" });
+		const record = makeSubagent({ id: "abc-123", type: "Plan", description: "Find stale TODOs" });
 		expect(record.id).toBe("abc-123");
-		expect(record.type).toBe("Explore");
+		expect(record.type).toBe("Plan");
 		expect(record.description).toBe("Find stale TODOs");
 	});
 

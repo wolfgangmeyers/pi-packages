@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type AgentReport,
 	formatAgentReport,
+	RUNNING_RESULT_GUIDANCE,
 	renderReportBody,
 	renderStatsParts,
 } from "#src/tools/get-result-report";
@@ -66,8 +67,9 @@ describe("renderStatsParts", () => {
 describe("renderReportBody", () => {
 	it("shows a still-running note for running status", () => {
 		const body = renderReportBody(makeReport({ status: "running", result: undefined }));
+		expect(body).toBe(RUNNING_RESULT_GUIDANCE);
 		expect(body).toBe(
-			"Agent is still running. Do not poll. Continue other work; you will be notified when this subagent finishes.",
+			"**MANDATORY**!!! This is a snapshot only. Do NOT repeatedly pull a running result!!! The full context must be sent back to the model on every call, so repeated pulls burn tokens very quickly. Rest and wait for completion; a completion notification will arrive automatically. Checking early is appropriate only when you were explicitly told to check early.",
 		);
 	});
 

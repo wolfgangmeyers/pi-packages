@@ -66,13 +66,13 @@ describe("resolveSpawnConfig — type resolution", () => {
 
   it("sets displayName from registry", () => {
     const result = resolveSpawnConfig(
-      { subagent_type: "Explore", prompt: "test", description: "d" },
+      { subagent_type: "Plan", prompt: "test", description: "d" },
       testRegistry,
       makeModelInfo(),
       defaultSettings,
     );
     if ("error" in result) return;
-    expect(result.identity.displayName).toBe("Explore");
+    expect(result.identity.displayName).toBe("Plan");
   });
 
   it("returns an error for a disabled agent type (exact match)", () => {
@@ -223,7 +223,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
 
   it("has no mode tag for replace-mode agents by default", () => {
     const result = resolveSpawnConfig(
-      { subagent_type: "Explore", prompt: "test", description: "d" },
+      { subagent_type: "Plan", prompt: "test", description: "d" },
       testRegistry,
       makeModelInfo(),
       defaultSettings,
@@ -246,7 +246,7 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
 
   it("omits tags on replace-mode detailBase by default", () => {
     const result = resolveSpawnConfig(
-      { subagent_type: "Explore", prompt: "test", description: "d" },
+      { subagent_type: "Plan", prompt: "test", description: "d" },
       testRegistry,
       makeModelInfo(),
       defaultSettings,
@@ -259,13 +259,13 @@ describe("resolveSpawnConfig — detailBase and tags", () => {
 describe("resolveSpawnConfig — prompt and rawType passthrough", () => {
   it("passes through prompt and rawType", () => {
     const result = resolveSpawnConfig(
-      { subagent_type: "Explore", prompt: "search for bugs", description: "bug search" },
+      { subagent_type: "Plan", prompt: "search for bugs", description: "bug search" },
       testRegistry,
       makeModelInfo(),
       defaultSettings,
     );
     if ("error" in result) return;
     expect(result.execution.prompt).toBe("search for bugs");
-    expect(result.identity.rawType).toBe("Explore");
+    expect(result.identity.rawType).toBe("Plan");
   });
 });

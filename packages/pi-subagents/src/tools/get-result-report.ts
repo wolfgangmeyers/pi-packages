@@ -9,6 +9,10 @@
 
 import type { SubagentStatus } from "#src/lifecycle/subagent";
 
+/** Shared model guidance for every incomplete result retrieval path. */
+export const RUNNING_RESULT_GUIDANCE =
+	"**MANDATORY**!!! This is a snapshot only. Do NOT repeatedly pull a running result!!! The full context must be sent back to the model on every call, so repeated pulls burn tokens very quickly. Rest and wait for completion; a completion notification will arrive automatically. Checking early is appropriate only when you were explicitly told to check early.";
+
 /** The data a get_subagent_result report renders from — only what the formatter reads. */
 export interface AgentReport {
 	id: string;
@@ -44,8 +48,7 @@ export function renderStatsParts(report: AgentReport): string[] {
 
 /** Select the per-status body: running note, error line, or trimmed result. */
 export function renderReportBody(report: AgentReport): string {
-	if (report.status === "running")
-		return "Agent is still running. Do not poll. Continue other work; you will be notified when this subagent finishes.";
+	if (report.status === "running") return RUNNING_RESULT_GUIDANCE;
 	if (report.status === "error") return `Error: ${report.error}`;
 	if (report.stoppedWhileQueued)
 		return "Agent was stopped while queued and never started. No work was performed.";

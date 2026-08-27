@@ -59,16 +59,16 @@ describe("createResolvedSpawnConfig", () => {
 
   it("mirrors displayName, description, subagentType, and model into presentation.detailBase", () => {
     const config = createResolvedSpawnConfig({
-      subagentType: "Explore",
-      displayName: "Explore",
+      subagentType: "Plan",
+      displayName: "Plan",
       description: "scan repo",
       model: "haiku",
     });
     expect(config.presentation.modelName).toBe("haiku");
     expect(config.presentation.detailBase).toEqual({
-      displayName: "Explore",
+      displayName: "Plan",
       description: "scan repo",
-      subagentType: "Explore",
+      subagentType: "Plan",
       modelName: "haiku",
       tags: undefined,
     });

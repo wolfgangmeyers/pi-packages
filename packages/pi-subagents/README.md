@@ -23,7 +23,7 @@ They always run in the background: launch and resume return immediately, while c
 - **Mid-run steering** — inject messages into running agents to redirect their work without restarting
 - **Session resume** — pick up where an agent left off, preserving full conversation context
 - **Graceful turn limits** — agents get a "wrap up" warning before hard abort, producing clean partial results instead of cut-off output
-- **Case-insensitive agent types** — `"explore"`, `"Explore"`, `"EXPLORE"` all work.
+- **Case-insensitive agent types** — `"plan"`, `"Plan"`, `"PLAN"` all work.
   Unknown types fall back to general-purpose with a note
 - **Fuzzy model selection** — specify models by name (`"haiku"`, `"sonnet"`) instead of full IDs, with automatic filtering to only available/configured models
 - **Context inheritance** — optionally fork the parent conversation into a sub-agent so it knows what's been discussed
@@ -49,14 +49,20 @@ The parent agent spawns sub-agents using the `subagent` tool:
 
 ```text
 subagent({
-  subagent_type: "Explore",
+  subagent_type: "Plan",
   prompt: "Find all files that handle authentication",
   description: "Find auth files",
 })
 ```
 
 Agents always return an ID immediately and notify you on completion.
-Use `get_subagent_result` only for a nonblocking snapshot; do not poll a running agent.
+Use `get_subagent_result` only for a nonblocking snapshot.
+**MANDATORY**!!!
+This is a snapshot only.
+Do NOT repeatedly pull a running result!!!
+The full context must be sent back to the model on every call, so repeated pulls burn tokens very quickly.
+Rest and wait for completion; a completion notification will arrive automatically.
+Checking early is appropriate only when you were explicitly told to check early.
 
 ## UI
 
@@ -66,7 +72,7 @@ The extension renders a persistent widget above the editor showing active backgr
 ● Agents
 ├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 5 tool uses · 33.8k token (62%) · 12.3s
 │    ⎿  editing 2 files…
-├─ ⠹ Explore  Find auth files · ↻3 · 3 tool uses · 12.4k token (8%) · 4.1s
+├─ ⠹ Plan  Find auth files · ↻3 · 3 tool uses · 12.4k token (8%) · 4.1s
 │    ⎿  searching…
 ├─ ⠹ Agent  Long-running task · ↻42 · 38 tool uses · 91.0k token (84% · ⇊2) · 2m17s
 │    ⎿  reading…
@@ -109,11 +115,10 @@ The LLM receives structured `<task-notification>` XML for parsing, while the use
 | Type              | Tools                      | Model                         | Prompt Mode            | Description                                                                                      |
 | ----------------- | -------------------------- | ----------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------ |
 | `general-purpose` | all 7                      | inherit                       | `append` (parent twin) | Inherits the parent's full system prompt — same rules, CLAUDE.md, project conventions            |
-| `Explore`         | read, bash, grep, find, ls | haiku (falls back to inherit) | `replace`              | Fast codebase exploration (read-only); inherits the parent prompt as a base                      |
 | `Plan`            | read, bash, grep, find, ls | inherit                       | `replace`              | Software architect for implementation planning (read-only); inherits the parent prompt as a base |
 
 The `general-purpose` agent is a **parent twin** — it receives the parent's entire system prompt plus a sub-agent context bridge, so it follows the same rules the parent does.
-Explore and Plan use `replace` mode: the parent prompt is the cacheable base and their specialist read-only instructions are appended last, giving them the final say.
+Plan uses `replace` mode: the parent prompt is the cacheable base and its specialist read-only instructions are appended last, giving it the final say.
 
 In every mode, a child that runs somewhere other than the parent — one given an isolated workspace by a `WorkspaceProvider` — does not inherit the parent's `Current working directory:` footer.
 That line is stripped from the inherited prompt, leaving the fresh footer Pi appends for the child session's own directory as the single, correct claim; without the strip, the child follows the parent's path instead.
@@ -218,7 +223,6 @@ Check status and retrieve results from a background agent.
 | Parameter  | Type    | Required | Description                   |
 | ---------- | ------- | -------- | ----------------------------- |
 | `agent_id` | string  | yes      | Agent ID to check             |
-| `wait`     | boolean | no       | Wait for completion           |
 | `verbose`  | boolean | no       | Include full conversation log |
 
 ### `steer_subagent`
@@ -391,7 +395,7 @@ Access the service for the current owning Pi session by its session ID:
 const { getSubagentsService } = await import("@gotgenes/pi-subagents");
 const ownerSessionId = ctx.sessionManager.getSessionId();
 const svc = getSubagentsService(ownerSessionId);
-svc?.spawn("Explore", "Check for stale TODOs");
+svc?.spawn("Plan", "Check for stale TODOs");
 ```
 
 Long-lived consumers should subscribe so they handle services published or replaced after their own extension initializes:

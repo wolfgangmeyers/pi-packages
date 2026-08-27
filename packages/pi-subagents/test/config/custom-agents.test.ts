@@ -218,12 +218,12 @@ Real.`);
     expect(result.has("real")).toBe(true);
   });
 
-  it("allows agents with names matching defaults (overrides them)", () => {
-    writeAgent("Explore", `---
-description: Custom Explore
+  it("allows agents with arbitrary names", () => {
+    writeAgent("specialist", `---
+description: Custom specialist
 ---
 
-Custom explore agent.`);
+Custom specialist agent.`);
     writeAgent("custom", `---
 description: Custom Agent
 ---
@@ -231,8 +231,8 @@ description: Custom Agent
 Should be loaded.`);
 
     const result = loadCustomAgents(tmpDir);
-    expect(result.has("Explore")).toBe(true);
-    expect(result.get("Explore")!.description).toBe("Custom Explore");
+    expect(result.has("specialist")).toBe(true);
+    expect(result.get("specialist")!.description).toBe("Custom specialist");
     expect(result.has("custom")).toBe(true);
   });
 

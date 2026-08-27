@@ -4,8 +4,8 @@ import type { AgentConfig } from "#src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
-    name: "Explore",
-    description: "Explore",
+    name: "Plan",
+    description: "Plan",
     builtinToolNames: ["read"],
     systemPrompt: "Test agent",
     promptMode: "replace",

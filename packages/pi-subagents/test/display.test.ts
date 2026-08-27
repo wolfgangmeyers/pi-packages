@@ -35,8 +35,8 @@ describe("getDisplayName", () => {
     expect(getDisplayName("my-agent", registry)).toBe("my-agent");
   });
 
-  it("uses registry to resolve Explore displayName", () => {
-    expect(getDisplayName("Explore", testRegistry)).toBe("Explore");
+  it("uses registry to resolve Plan displayName", () => {
+    expect(getDisplayName("Plan", testRegistry)).toBe("Plan");
   });
 
   it("uses registry to resolve general-purpose displayName", () => {
@@ -60,7 +60,7 @@ describe("getPromptModeLabel", () => {
   });
 
   it("returns undefined for replace promptMode", () => {
-    expect(getPromptModeLabel("Explore", testRegistry)).toBeUndefined();
+    expect(getPromptModeLabel("Plan", testRegistry)).toBeUndefined();
   });
 });
 

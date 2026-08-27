@@ -35,17 +35,17 @@ describe("buildAgentPrompt", () => {
   });
 
   it("handles non-git repos", () => {
-    const config = getDefaultConfig("Explore");
+    const config = getDefaultConfig("general-purpose");
     const prompt = buildAgentPrompt(config, "/workspace", envNoGit);
     expect(prompt).toContain("Not a git repository");
     expect(prompt).not.toContain("Branch:");
   });
 
-  it("Explore prompt is read-only", () => {
-    const config = getDefaultConfig("Explore");
+  it("Plan prompt is read-only", () => {
+    const config = getDefaultConfig("Plan");
     const prompt = buildAgentPrompt(config, "/workspace", env);
     expect(prompt).toContain("READ-ONLY");
-    expect(prompt).toContain("file search specialist");
+    expect(prompt).toContain("software architect");
   });
 
   it("Plan prompt is read-only", () => {
@@ -250,10 +250,10 @@ describe("buildAgentPrompt", () => {
   describe("active_agent tag injection", () => {
     it("includes <active_agent name=...> tag in replace mode after identity prefix", () => {
       const config: AgentConfig = {
-        name: "Explore",
-        description: "Explore",
+        name: "Plan",
+        description: "Plan",
         builtinToolNames: [],
-        systemPrompt: "You are an explorer.",
+        systemPrompt: "You are a planner.",
         promptMode: "replace",
         inheritContext: false,
       };
@@ -266,7 +266,7 @@ describe("buildAgentPrompt", () => {
         { systemPrompt: "Parent identity prefix.", cwd: PARENT_CWD },
       );
       const idxIdentity = prompt.indexOf("Parent identity prefix.");
-      const idxTag = prompt.indexOf('<active_agent name="Explore"/>');
+      const idxTag = prompt.indexOf('<active_agent name="Plan"/>');
       expect(idxTag).toBeGreaterThan(-1);
       expect(idxTag).toBeGreaterThan(idxIdentity);
     });

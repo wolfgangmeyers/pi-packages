@@ -14,7 +14,7 @@ describe("toSubagentRecord", () => {
   const baseRecord = (() => {
     const r = createTestSubagent({
       id: "abc-123",
-      type: "Explore",
+      type: "Plan",
       description: "Check stale TODOs",
       result: "Found 3 stale TODOs",
       toolUses: 5,
@@ -28,7 +28,7 @@ describe("toSubagentRecord", () => {
     const result = toSubagentRecord(baseRecord);
     expect(result).toEqual({
       id: "abc-123",
-      type: "Explore",
+      type: "Plan",
       description: "Check stale TODOs",
       status: "completed",
       result: "Found 3 stale TODOs",
@@ -154,7 +154,7 @@ function createManagerStub() {
 describe("SubagentsServiceAdapter — getRecord and listAgents", () => {
   const recordA = createTestSubagent({
     id: "a-1",
-    type: "Explore",
+    type: "Plan",
     description: "task A",
     lifetimeUsage: { input: 10, output: 20, cacheWrite: 5 },
   });
@@ -215,7 +215,7 @@ describe("SubagentsServiceAdapter — spawn", () => {
       vi.fn(),
       makeRuntimeStub({ currentCtx: undefined }),
     );
-    expect(() => svc.spawn("Explore", "do something")).toThrow(
+    expect(() => svc.spawn("Plan", "do something")).toThrow(
       /no active session/i,
     );
   });
@@ -228,7 +228,7 @@ describe("SubagentsServiceAdapter — spawn", () => {
       resolveModel,
       makeRuntimeStub({ currentCtx: { ...makeStubCtx(), modelRegistry: registry } }),
     );
-    svc.spawn("Explore", "check TODOs", { model: "haiku" });
+    svc.spawn("Plan", "check TODOs", { model: "haiku" });
     expect(resolveModel).toHaveBeenCalledWith("haiku", registry);
   });
 
@@ -238,7 +238,7 @@ describe("SubagentsServiceAdapter — spawn", () => {
       () => 'Model not found: "bad-model".\n\nAvailable models:\n  anthropic/claude-sonnet',
       makeRuntimeStub(),
     );
-    expect(() => svc.spawn("Explore", "task", { model: "bad-model" })).toThrow(
+    expect(() => svc.spawn("Plan", "task", { model: "bad-model" })).toThrow(
       /Model not found/,
     );
   });
@@ -251,11 +251,11 @@ describe("SubagentsServiceAdapter — spawn", () => {
       () => resolvedModel,
       makeRuntimeStub(),
     );
-    const id = svc.spawn("Explore", "check TODOs", { model: "sonnet", maxTurns: 5 });
+    const id = svc.spawn("Plan", "check TODOs", { model: "sonnet", maxTurns: 5 });
     expect(id).toBe("spawned-id");
     expect(mgr.spawn).toHaveBeenCalledWith(
       expect.anything(), // snapshot
-      "Explore",
+      "Plan",
       "check TODOs",
       expect.objectContaining({
         model: resolvedModel,
@@ -285,10 +285,10 @@ describe("SubagentsServiceAdapter — spawn", () => {
     const mgr = createManagerStub();
     const svc = new SubagentsServiceAdapter(mgr, vi.fn(), makeRuntimeStub());
     const longPrompt = "x".repeat(200);
-    svc.spawn("Explore", longPrompt);
+    svc.spawn("Plan", longPrompt);
     expect(mgr.spawn).toHaveBeenCalledWith(
       expect.anything(), // snapshot
-      "Explore",
+      "Plan",
       longPrompt,
       expect.objectContaining({ description: "x".repeat(80) }),
     );
@@ -297,10 +297,10 @@ describe("SubagentsServiceAdapter — spawn", () => {
   it("uses provided description over default", () => {
     const mgr = createManagerStub();
     const svc = new SubagentsServiceAdapter(mgr, vi.fn(), makeRuntimeStub());
-    svc.spawn("Explore", "long prompt here", { description: "short desc" });
+    svc.spawn("Plan", "long prompt here", { description: "short desc" });
     expect(mgr.spawn).toHaveBeenCalledWith(
       expect.anything(), // snapshot
-      "Explore",
+      "Plan",
       "long prompt here",
       expect.objectContaining({ description: "short desc" }),
     );
@@ -309,7 +309,7 @@ describe("SubagentsServiceAdapter — spawn", () => {
   it("does not call resolveModel when no model option is provided", () => {
     const resolveModel = vi.fn();
     const svc = new SubagentsServiceAdapter(createManagerStub(), resolveModel, makeRuntimeStub());
-    svc.spawn("Explore", "quick check");
+    svc.spawn("Plan", "quick check");
     expect(resolveModel).not.toHaveBeenCalled();
   });
 });
@@ -417,7 +417,7 @@ describe("SubagentsServiceAdapter — lifecycle", () => {
     const snapshots = [
       Object.freeze({
         id: "agent-1",
-        type: "Explore",
+        type: "Plan",
         description: "Check lifecycle",
         status: "running" as const,
       }),
