@@ -17,6 +17,7 @@ import { SubagentState, type SubagentStatus } from "#src/lifecycle/subagent-stat
 import type { LifetimeUsage } from "#src/lifecycle/usage";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
 import { WorkspaceBracket } from "#src/lifecycle/workspace-bracket";
+import { journalSubagentError, journalSubagentEvent } from "#src/observation/instrumentation";
 import { subscribeSubagentObserver } from "#src/observation/record-observer";
 import type { RunConfig } from "#src/runtime";
 import type { AgentInvocation, CompactionInfo, ParentSessionInfo, SessionMessage, SubagentType, ThinkingLevel } from "#src/types";
@@ -261,6 +262,7 @@ export class Subagent {
 					invocation: this.invocation,
 				});
 			} catch (err) {
+				journalSubagentError("workspace_prepare", err, { agent_id: this.id, kind: this.type });
 				this.markError(err);
 				this.listeners.release();
 				this.execution.observer?.onRunFinished?.(this);
@@ -279,15 +281,47 @@ export class Subagent {
 			});
 		} catch (err) {
 			// The factory disposed its own session on a post-creation failure.
+			journalSubagentError("session_create", err, { agent_id: this.id, kind: this.type });
 			this.failRun(err);
 			return;
 		}
 
+		journalSubagentEvent("subagents.child.session_linked", {
+			agent_id: this.id,
+			session_id: this.subagentSession.sessionId,
+			parent_session_id: this.execution.parentSession?.parentSessionId,
+		});
 		this.flushPendingSteers();
 		this.listeners.attachObserver(subscribeSubagentObserver(this.subagentSession, this.state, {
 			onCompact: (info) => this.execution.observer?.onCompacted?.(this, info),
 		}));
-		this.execution.observer?.onSessionCreated?.(this);
+		try {
+			this.execution.observer?.onSessionCreated?.(this);
+		} catch (err) {
+			journalSubagentError("on_session_created", err, {
+				agent_id: this.id,
+				session_id: this.subagentSession.sessionId,
+				parent_session_id: this.execution.parentSession?.parentSessionId,
+			});
+			// The observer runs after session creation, so this path owns the
+			// session teardown before entering the normal terminal funnel.
+			const failedSession = this.subagentSession;
+			this._releasedOutputFile = failedSession.outputFile;
+			try {
+				this.disposeSession();
+			} catch (cleanupErr) {
+				journalSubagentError("session_dispose", cleanupErr, {
+					agent_id: this.id,
+					session_id: failedSession.sessionId,
+				});
+				debugLog("session dispose after onSessionCreated failure", cleanupErr);
+			} finally {
+				this.subagentSession = undefined;
+				this._sessionReleased = true;
+			}
+			this.failRun(err);
+			return;
+		}
 
 		const runConfig = this.execution.getRunConfig?.();
 		try {
@@ -299,6 +333,7 @@ export class Subagent {
 			});
 			this.completeRun(result);
 		} catch (err) {
+			journalSubagentError("turn_loop", err, { agent_id: this.id, kind: this.type });
 			this.failRun(err);
 		}
 	}
@@ -364,6 +399,7 @@ export class Subagent {
 		try {
 			this.completeResume(await subagentSession.resumeTurnLoop(prompt, signal));
 		} catch (err) {
+			journalSubagentError("resume_turn_loop", err, { agent_id: this.id, kind: this.type });
 			this.failResume(err);
 		}
 	}
@@ -467,7 +503,9 @@ export class Subagent {
 	 */
 	private flushPendingSteers(): void {
 		for (const msg of this._pendingSteers) {
-			this.subagentSession?.steer(msg).catch(() => {});
+			this.subagentSession?.steer(msg).catch((err: unknown) => {
+				journalSubagentError("buffered_steer", err, { agent_id: this.id, kind: this.type });
+			});
 		}
 		this._pendingSteers = [];
 	}
@@ -524,7 +562,10 @@ export class Subagent {
 
 		try {
 			this.workspaceBracket.dispose({ status: "error", description: this.description });
-		} catch (cleanupErr) { debugLog("workspace dispose on agent error", cleanupErr); }
+		} catch (cleanupErr) {
+			journalSubagentError("workspace_dispose", cleanupErr, { agent_id: this.id, kind: this.type });
+			debugLog("workspace dispose on agent error", cleanupErr);
+		}
 
 		this.execution.observer?.onRunFinished?.(this);
 	}

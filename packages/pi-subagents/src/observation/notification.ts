@@ -1,6 +1,7 @@
 import { debugLog } from "#src/debug";
 import type { SubagentStatus } from "#src/lifecycle/subagent-state";
 import { getLifetimeTotal } from "#src/lifecycle/usage";
+import { journalSubagentError } from "#src/observation/instrumentation";
 import type { Subagent } from "#src/types";
 
 /** Details attached to custom notification messages for visual rendering. */
@@ -218,6 +219,7 @@ export class NotificationManager implements NotificationSystem {
       try {
         this.emitIndividualNudge(record);
       } catch (err) {
+        journalSubagentError("notification_render", err);
         debugLog("notification render", err);
       }
     }

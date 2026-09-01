@@ -1,5 +1,6 @@
 import { debugLog } from "#src/debug";
 import type { SubagentManagerObserver } from "#src/lifecycle/subagent-manager";
+import { journalSubagentError } from "#src/observation/instrumentation";
 import type { CompactionInfo, Subagent } from "#src/types";
 
 /**
@@ -46,6 +47,7 @@ export class CompositeSubagentObserver implements SubagentManagerObserver {
       try {
         call(o);
       } catch (err) {
+        journalSubagentError(`observer.${label}`, err);
         debugLog(`CompositeSubagentObserver.${label}`, err);
       }
     }

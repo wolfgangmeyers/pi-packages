@@ -21,6 +21,7 @@ import type { AgentConfigLookup } from "#src/config/agent-types";
 import type { ChildLifecyclePublisher } from "#src/lifecycle/child-lifecycle";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import { SubagentSession } from "#src/lifecycle/subagent-session";
+import { journalSubagentError } from "#src/observation/instrumentation";
 import type { EnvInfo } from "#src/session/env";
 import type { ModelRegistry } from "#src/session/model-resolver";
 import { type AssemblerIO, assembleSessionConfig } from "#src/session/session-config";
@@ -238,6 +239,10 @@ export async function createSubagentSession(
   } catch (err) {
     // Binding failed after session-created — dispose (emit disposed +
     // session.dispose()) before rethrowing so registration is never leaked.
+    journalSubagentError("child_bind_extensions", err, {
+      session_id: sessionId,
+      parent_session_id: parentSessionId,
+    });
     subagentSession.dispose();
     throw err;
   }

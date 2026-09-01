@@ -16,6 +16,7 @@ import { Subagent, type SubagentLifecycleObserver } from "#src/lifecycle/subagen
 import type { SubagentSession } from "#src/lifecycle/subagent-session";
 import { SubagentState } from "#src/lifecycle/subagent-state";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
+import { journalSubagentError, journalSubagentEvent } from "#src/observation/instrumentation";
 
 import type { RunConfig } from "#src/runtime";
 import type { SubagentLifecycleListener, SubagentLifecycleSnapshot } from "#src/service/service";
@@ -153,17 +154,40 @@ export class SubagentManager {
       status: record.status,
     });
     if (!terminal) {
-      if (this.lifecycleSnapshots.size >= MAX_LIFECYCLE_SNAPSHOTS && !this.lifecycleSnapshots.has(record.id)) {
+      const snapshotWasAtCap =
+        this.lifecycleSnapshots.size >= MAX_LIFECYCLE_SNAPSHOTS && !this.lifecycleSnapshots.has(record.id);
+      if (snapshotWasAtCap) {
+        journalSubagentEvent("subagents.snapshot_capped", {
+          snapshot_count: this.lifecycleSnapshots.size,
+          subagent_count: this.agents.size,
+        });
         const oldest = this.lifecycleSnapshots.keys().next().value;
-        if (oldest) this.lifecycleSnapshots.delete(oldest);
+        if (oldest !== undefined) {
+          this.lifecycleSnapshots.delete(oldest);
+          journalSubagentEvent("subagents.snapshot_evicted", {
+            agent_id: oldest,
+            snapshot_count: this.lifecycleSnapshots.size,
+          });
+        }
       }
       this.lifecycleSnapshots.set(record.id, snapshot);
     }
+    // This is a redacted projection. Keep the journal record to an ID and
+    // count so diagnostics cannot copy descriptions or other record content.
+    journalSubagentEvent("subagents.snapshot_normalized", {
+      agent_id: record.id,
+      snapshot_count: this.lifecycleSnapshots.size,
+    });
     try {
       for (const listener of this.lifecycleListeners) {
         try {
           listener(snapshot);
         } catch (err) {
+          journalSubagentError("lifecycle_subscriber", err, {
+            agent_id: record.id,
+            kind: record.type,
+            status: record.status,
+          });
           debugLog("lifecycle subscriber", err);
         }
       }
@@ -183,15 +207,32 @@ export class SubagentManager {
         ? (agent) => options.observer!.onSessionCreated!(agent)
         : undefined,
       onRunFinished: (agent) => {
-        try { this.publishLifecycle(agent, true); } catch (err) { debugLog("lifecycle snapshot observer", err); }
-        try { this.observer?.onSubagentCompleted(agent); } catch (err) { debugLog("onSubagentCompleted observer", err); }
+        try { this.publishLifecycle(agent, true); } catch (err) {
+          journalSubagentError("lifecycle_snapshot_observer", err, { agent_id: agent.id, kind: agent.type });
+          debugLog("lifecycle snapshot observer", err);
+        }
+        try { this.observer?.onSubagentCompleted(agent); } catch (err) {
+          journalSubagentError("completed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
+          debugLog("onSubagentCompleted observer", err);
+        }
       },
       onResumeStarted: (agent) => {
+        journalSubagentEvent("subagents.resume_started", {
+          agent_id: agent.id,
+          kind: agent.type,
+          status: agent.status,
+        });
         this.publishLifecycle(agent);
       },
       onResumeFinished: (agent) => {
-        try { this.publishLifecycle(agent, true); } catch (err) { debugLog("lifecycle snapshot observer", err); }
-        try { this.observer?.onSubagentResumed(agent); } catch (err) { debugLog("onSubagentResumed observer", err); }
+        try { this.publishLifecycle(agent, true); } catch (err) {
+          journalSubagentError("lifecycle_snapshot_observer", err, { agent_id: agent.id, kind: agent.type });
+          debugLog("lifecycle snapshot observer", err);
+        }
+        try { this.observer?.onSubagentResumed(agent); } catch (err) {
+          journalSubagentError("resumed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
+          debugLog("onSubagentResumed observer", err);
+        }
       },
       onCompacted: (agent, info) => {
         this.observer?.onSubagentCompacted(agent, info);
@@ -240,6 +281,12 @@ export class SubagentManager {
     this.observer?.onSubagentCreated(record);
 
     if (!options.bypassQueue) {
+      journalSubagentEvent("subagents.queued", {
+        agent_id: record.id,
+        kind: record.type,
+        status: record.status,
+        state: "queued",
+      });
       // Schedule on the limiter — scheduleVia captures the limiter promise
       // eagerly, so abort-while-queued settles cleanly when the slot frees.
       record.scheduleVia((thunk) => this.limiter.schedule(thunk));

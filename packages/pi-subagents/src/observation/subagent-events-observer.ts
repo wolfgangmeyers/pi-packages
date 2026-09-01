@@ -1,4 +1,5 @@
 import type { SubagentManagerObserver } from "#src/lifecycle/subagent-manager";
+import { journalSubagentEvent } from "#src/observation/instrumentation";
 import { buildEventData, type NotificationSystem } from "#src/observation/notification";
 import type { CompactionInfo, Subagent } from "#src/types";
 
@@ -40,6 +41,11 @@ export class SubagentEventsObserver implements SubagentManagerObserver {
 			type: record.type,
 			description: record.description,
 		});
+		journalSubagentEvent("subagents.running", {
+			agent_id: record.id,
+			kind: record.type,
+			status: record.status,
+		});
 	}
 
 	onSubagentCompleted(record: Subagent): void {
@@ -51,6 +57,11 @@ export class SubagentEventsObserver implements SubagentManagerObserver {
 		} else {
 			this.emit("subagents:completed", eventData);
 		}
+		journalSubagentEvent("subagents.terminal", {
+			agent_id: record.id,
+			kind: record.type,
+			status: record.status,
+		});
 
 		this.persistAndNotify(record);
 	}
@@ -60,6 +71,11 @@ export class SubagentEventsObserver implements SubagentManagerObserver {
 		// channel carries both — the payload's status/error discriminate. Existing
 		// subagents:completed/failed subscribers keep their once-per-run semantics.
 		this.emit("subagents:resumed", buildEventData(record));
+		journalSubagentEvent("subagents.resume_terminal", {
+			agent_id: record.id,
+			kind: record.type,
+			status: record.status,
+		});
 		this.persistAndNotify(record);
 	}
 
@@ -93,6 +109,11 @@ export class SubagentEventsObserver implements SubagentManagerObserver {
 			tokensBefore: info.tokensBefore,
 			compactionCount: record.compactionCount,
 		});
+		journalSubagentEvent("subagents.compacted", {
+			agent_id: record.id,
+			kind: record.type,
+			status: record.status,
+		});
 	}
 
 	onSubagentCreated(record: Subagent): void {
@@ -102,6 +123,12 @@ export class SubagentEventsObserver implements SubagentManagerObserver {
 			type: record.type,
 			description: record.description,
 			isBackground: true,
+		});
+		journalSubagentEvent("subagents.created", {
+			agent_id: record.id,
+			kind: record.type,
+			status: record.status,
+			state: "queued",
 		});
 	}
 }

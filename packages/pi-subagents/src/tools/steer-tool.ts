@@ -1,5 +1,6 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { journalSubagentError, journalSubagentEvent } from "#src/observation/instrumentation";
 import { formatLifetimeTokens, textResult } from "#src/tools/helpers";
 import type { SteerOutcome, Subagent } from "#src/types";
 
@@ -39,6 +40,7 @@ export class SteerTool {
 		try {
 			outcome = await record.steer(params.message);
 		} catch (err) {
+			journalSubagentError("steer", err, { agent_id: params.agent_id });
 			return textResult(
 				`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`,
 			);
@@ -51,11 +53,13 @@ export class SteerTool {
 				);
 			case "buffered":
 				this.events.emit("subagents:steered", { id: record.id, message: params.message });
+				journalSubagentEvent("subagents.steered", { agent_id: record.id });
 				return textResult(
 					`Steering message queued for agent ${record.id}. It will be delivered once the session initializes.`,
 				);
 			case "delivered":
 				this.events.emit("subagents:steered", { id: record.id, message: params.message });
+				journalSubagentEvent("subagents.steered", { agent_id: record.id });
 				return this.renderDelivered(record);
 		}
 	}

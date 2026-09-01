@@ -19,6 +19,7 @@ import type {
   WorkspacePrepareContext,
   WorkspaceProvider,
 } from "#src/lifecycle/workspace";
+import { journalSubagentError } from "#src/observation/instrumentation";
 
 
 // SubagentStatus is defined in the lifecycle layer (single home) and re-exported
@@ -277,6 +278,7 @@ function callServiceListener(
     listener(service);
   } catch (error) {
     // One extension's listener must not block registry publication or cleanup.
+    journalSubagentError("service_listener", error);
     debugLog("SubagentsService listener", error);
   }
 }

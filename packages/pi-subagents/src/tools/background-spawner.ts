@@ -1,5 +1,6 @@
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import type { AgentSpawnConfig } from "#src/lifecycle/subagent-manager";
+import { journalSubagentError } from "#src/observation/instrumentation";
 import { textResult } from "#src/tools/helpers";
 import type { ResolvedSpawnConfig } from "#src/tools/spawn-config";
 import type { ParentSessionInfo, Subagent } from "#src/types";
@@ -40,6 +41,7 @@ export function spawnBackground(
       invocation: execution.agentInvocation,
     });
   } catch (err) {
+    journalSubagentError("spawn", err, { kind: identity.subagentType });
     return textResult(err instanceof Error ? err.message : String(err));
   }
 

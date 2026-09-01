@@ -79,6 +79,11 @@ export class SubagentSession {
     return this.meta.outputFile;
   }
 
+  /** Child session ID used to correlate SDK lifecycle with the manager record. */
+  get sessionId(): string {
+    return this.meta.sessionId;
+  }
+
   /** Drive the initial run's turn loop; emits `completed` on success. */
   async runTurnLoop(prompt: string, opts: TurnLoopOptions): Promise<TurnLoopResult> {
     const session = this._session;

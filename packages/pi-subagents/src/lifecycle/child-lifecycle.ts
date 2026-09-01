@@ -10,6 +10,8 @@
  * Pi SDK imports — `index.ts` wires it to `pi.events.emit`.
  */
 
+import { journalSubagentError, journalSubagentEvent } from "#src/observation/instrumentation";
+
 /** Emitted at the start of a child run, before the session is created. */
 export const SUBAGENT_CHILD_SPAWNING = "subagents:child:spawning";
 
@@ -76,20 +78,46 @@ export function createChildLifecyclePublisher(
 ): ChildLifecyclePublisher {
   return {
     spawning(event) {
-      emit(SUBAGENT_CHILD_SPAWNING, event);
+      emitChildEvent(SUBAGENT_CHILD_SPAWNING, event, "subagents.child.spawning", {
+        kind: event.agentName,
+        parent_session_id: event.parentSessionId,
+      });
     },
     sessionCreated(event) {
-      emit(SUBAGENT_CHILD_SESSION_CREATED, event);
+      emitChildEvent(SUBAGENT_CHILD_SESSION_CREATED, event, "subagents.child.session_created", {
+        session_id: event.sessionId,
+        parent_session_id: event.parentSessionId,
+      });
     },
     completed(event) {
-      emit(SUBAGENT_CHILD_COMPLETED, event);
+      emitChildEvent(SUBAGENT_CHILD_COMPLETED, event, "subagents.child.completed", {
+        kind: event.agentName,
+        status: event.aborted ? "aborted" : event.steered ? "steered" : "completed",
+      });
     },
     disposed(event) {
       try {
-        emit(SUBAGENT_CHILD_DISPOSED, event);
+        emitChildEvent(SUBAGENT_CHILD_DISPOSED, event, "subagents.child.disposed", {
+          session_id: event.sessionId,
+        });
       } finally {
         onDisposed?.(event);
       }
     },
   };
+
+  function emitChildEvent(
+    channel: string,
+    event: unknown,
+    journalEvent: string,
+    fields: Parameters<typeof journalSubagentEvent>[1],
+  ): void {
+    try {
+      emit(channel, event);
+    } catch (error) {
+      journalSubagentError("child_lifecycle_emit", error, fields);
+      throw error;
+    }
+    journalSubagentEvent(journalEvent, fields);
+  }
 }
