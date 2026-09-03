@@ -6,6 +6,15 @@ description: Evaluate a third-party PR, decide adopt/adapt/decline, and (usually
 
 PR number: `$1`
 
+## Launch contract (mandatory)
+
+The caller must provide both absolute paths before this prompt runs:
+
+- `TARGET_REPO`: the absolute path to the checkout for the repository that owns PR #$1.
+- `TARGET_WORKTREE`: the absolute path to the isolated review worktree for PR #$1.
+
+Abort if either value is missing, relative, or still a placeholder. Do not inherit the launch directory. Begin repository work with `cd "$TARGET_REPO"` (or `cd "$TARGET_WORKTREE"` for review commands) and verify `pwd -P`, `git rev-parse --show-toplevel`, and `git remote get-url origin` there. Resolve the PR's `nameWithOwner` with `gh pr view` and abort unless the checkout's origin matches that repository. Never run repository commands from the inherited caller cwd, and never use this prompt to switch branches in an unrelated repository.
+
 Your job is to **evaluate** PR #$1 — not to merge it reflexively.
 Most third-party PRs arriving in this repo are best treated as a *signal of a real problem* plus *one possible implementation*.
 The common, preferred outcome is **adopt the capability with our own simplified design**, planned via `/plan-issue` — not a straight merge.
