@@ -32,7 +32,10 @@ import { type NotificationDetails, NotificationManager } from "#src/observation/
 import { createNotificationRenderer } from "#src/observation/renderer";
 import { SubagentEventsObserver } from "#src/observation/subagent-events-observer";
 import { createSubagentRuntime } from "#src/runtime";
-import { unpublishCurrentSubagentsService } from "#src/service/owner-service-cleanup";
+import {
+  registerSubagentsServiceOwnerRelease,
+  unpublishCurrentSubagentsService,
+} from "#src/service/owner-service-cleanup";
 import { publishSubagentsService, unpublishSubagentsService } from "#src/service/service";
 import { SubagentsServiceAdapter } from "#src/service/service-adapter";
 import { detectEnv } from "#src/session/env";
@@ -129,6 +132,9 @@ export default function (pi: ExtensionAPI) {
     getRetentionPolicy: () => settings,
   });
 
+  // The manager keeps the complete row as internal fallback data. Pi receives only the immutable delta envelope.
+  manager.subscribeLifecycleV2((_row, delta) => eventsObserver.onLifecycleV2(delta));
+
   // The service is published at session_start, once this extension instance
   // can key its registration by the owning parent or child session ID.
   const service = new SubagentsServiceAdapter(manager, resolveModel, runtime);
@@ -136,6 +142,8 @@ export default function (pi: ExtensionAPI) {
     service,
     publishSubagentsService,
     unpublishSubagentsService,
+    registerSubagentsServiceOwnerRelease,
+    (ownerSessionId, disposition) => manager.releaseLifecycleV2Owner(ownerSessionId, disposition),
   );
 
   const lifecycle = new SessionLifecycleHandler(
@@ -147,7 +155,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (event, ctx) => lifecycle.handleSessionStart(event, ctx));
   pi.on("session_before_switch", () => lifecycle.handleSessionBeforeSwitch());
-  pi.on("session_shutdown", () => lifecycle.handleSessionShutdown());
+  pi.on("session_shutdown", (event) => lifecycle.handleSessionShutdown(event));
 
   // Live widget: constructed after the manager (it polls listAgents()) and
   // registered as a lifecycle observer so it self-drives its update timer.

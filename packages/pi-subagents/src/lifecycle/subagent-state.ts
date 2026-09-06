@@ -170,7 +170,7 @@ export class SubagentState {
 		addUsage(this._lifetimeUsage, delta);
 	}
 
-	/** Increment compaction count. Called by record-observer on compaction_end. */
+	/** Increment lifetime successful-compaction count. Called by record-observer on compaction_end. */
 	incrementCompactions(): void {
 		this._compactionCount++;
 	}

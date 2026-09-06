@@ -28,6 +28,7 @@ export interface AgentToolRuntime {
 	buildSnapshot(inheritContext: boolean): ParentSnapshot;
 	getModelInfo(): ModelInfo;
 	getSessionInfo(): { parentSessionFile: string; parentSessionId: string };
+	getToolParentSessionInfo?(toolCallId: string): ParentSessionInfo;
 }
 
 /** Narrow settings accessor — only the fields the Agent tool reads. */
@@ -76,11 +77,6 @@ export class AgentTool {
 		);
 		if ("error" in config) return textResult(config.error);
 
-		// ---- Boundary extraction (after config so inheritContext is resolved) ----
-		const snapshot = this.runtime.buildSnapshot(config.execution.inheritContext);
-		const { parentSessionFile, parentSessionId } = this.runtime.getSessionInfo();
-		const parentSession: ParentSessionInfo = { parentSessionFile, parentSessionId, toolCallId };
-
 		// ---- Resume existing agent ----
 		if (params.resume) {
 			const existing = this.manager.getRecord(params.resume as string);
@@ -107,6 +103,21 @@ export class AgentTool {
 		}
 
 		// ---- Background execution ----
+		if (typeof this.runtime.getToolParentSessionInfo !== "function") {
+			return textResult("Cannot spawn a subagent because the active session cannot read persisted entries.");
+		}
+
+		let parentSession: ParentSessionInfo;
+		try {
+			parentSession = this.runtime.getToolParentSessionInfo(toolCallId);
+		} catch (err) {
+			return textResult(err instanceof Error ? err.message : String(err));
+		}
+
+		// The source-backed parent entry must still exist before snapshotting the
+		// active runtime. There is no await between these reads, so shutdown cannot
+		// clear the context after the checked binding and before the snapshot.
+		const snapshot = this.runtime.buildSnapshot(config.execution.inheritContext);
 		return spawnBackground(
 			this.manager,
 			{ config, snapshot, parentSession, settings: this.settings },

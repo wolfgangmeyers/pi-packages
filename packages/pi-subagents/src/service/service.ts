@@ -20,11 +20,24 @@ import type {
   WorkspaceProvider,
 } from "#src/lifecycle/workspace";
 import { journalSubagentError } from "#src/observation/instrumentation";
+import type {
+  ContextRefV1,
+  ControlResultAppendOutcomeV1,
+  ControlResultPayloadV1,
+  LifecycleSnapshotV2ServiceResult,
+} from "#src/types";
 
 
 // SubagentStatus is defined in the lifecycle layer (single home) and re-exported
 // here for the public API surface — mirrors the LifetimeUsage / workspace pattern.
 export type { SubagentStatus } from "#src/lifecycle/subagent";
+export type {
+  ContextRefV1,
+  ControlResultAppendOutcomeV1,
+  ControlResultPayloadV1,
+  LifecycleSnapshotV2ServiceResult,
+  SubagentLifecycleSnapshotV2,
+} from "#src/types";
 
 /** Redacted live lifecycle view intended for cross-extension observation. */
 export interface SubagentLifecycleSnapshot {
@@ -100,6 +113,15 @@ export interface SubagentsService {
   /** Return the currently active redacted lifecycle snapshots. */
   getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[];
 
+  /** Return the manager's bounded, deeply frozen service snapshot for this owner. */
+  getLifecycleSnapshotV2(ownerSessionId: string): LifecycleSnapshotV2ServiceResult;
+
+  /** Append a validated control result to the exact manager-issued live child context. */
+  appendControlResultV1(
+    contextRef: ContextRefV1,
+    payload: ControlResultPayloadV1,
+  ): Promise<ControlResultAppendOutcomeV1>;
+
   /**
    * Register the single workspace provider that supplies a child's working
    * directory plus bracketed setup/teardown. Throws if one is already
@@ -117,6 +139,7 @@ export const SUBAGENT_EVENTS = {
   COMPACTED: "subagents:compacted",
   CREATED: "subagents:created",
   STEERED: "subagents:steered",
+  LIFECYCLE_V2: "subagents:lifecycle-v2",
 } as const;
 
 // ---- Accessor functions ----

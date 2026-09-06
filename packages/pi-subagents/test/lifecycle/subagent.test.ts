@@ -4,7 +4,16 @@ import { Subagent, type SubagentExecution, type SubagentLifecycleObserver } from
 import type { SubagentSession, TurnLoopResult } from "#src/lifecycle/subagent-session";
 import { SubagentState, type SubagentStateInit } from "#src/lifecycle/subagent-state";
 import type { Workspace, WorkspaceProvider } from "#src/lifecycle/workspace";
-import type { AgentInvocation, CompactionInfo, SubagentType } from "#src/types";
+import type {
+	AgentInvocation,
+	CompactionInfo,
+	CompactionTransitionV2,
+	SourceCompactionV2,
+	SourceModelV2,
+	SubagentLifecycleRunV2,
+	SubagentType,
+} from "#src/types";
+import { makeModel } from "#test/helpers/make-model";
 import { makeStubExecution } from "#test/helpers/make-subagent";
 import { createMockSession, createSubagentSessionStub, emitResumeUsageAndCompaction, toSubagentSession } from "#test/helpers/mock-session";
 import { STUB_SNAPSHOT } from "#test/helpers/stub-ctx";
@@ -105,6 +114,22 @@ describe("Subagent — constructor", () => {
 		expect(record.toolCallId).toBeUndefined();
 	});
 
+	it("copies lifecycle owner and parent-entry bindings from a mutable input", () => {
+		const parentSession = { parentSessionId: "owner-original", parentEntryId: "entry-original" };
+		const record = makeSubagent({ execution: makeStubExecution({ parentSession }) });
+
+		parentSession.parentSessionId = "owner-mutated";
+		parentSession.parentEntryId = "entry-mutated";
+
+		expect(record.lifecycleOwnerSessionId).toBe("owner-original");
+		expect(record.lifecycleParentEntryId).toBe("entry-original");
+	});
+
+	it("leaves lifecycle bindings undefined for legacy manager records", () => {
+		const record = makeSubagent();
+		expect(record.lifecycleOwnerSessionId).toBeUndefined();
+		expect(record.lifecycleParentEntryId).toBeUndefined();
+	});
 });
 
 describe("convenience getters", () => {
@@ -802,6 +827,254 @@ function createResumableAgent(overrides?: {
 	agent.subagentSession = toSubagentSession(stub);
 	return { agent, session, stub };
 }
+
+describe("Subagent — lifecycle V2 run projection", () => {
+	it("keeps its logical task id while giving the initial execution and resume distinct run ids", async () => {
+		const model = makeModel({ provider: "openai", id: "gpt-5.6", name: "GPT-5.6" });
+		const runIdsObservedAtResumeStart: string[] = [];
+		const agent = new Subagent({
+			id: "task-123",
+			type: "general-purpose",
+			description: "run identity test",
+			execution: makeStubExecution({
+				model,
+				observer: {
+					onResumeStarted: (resumedAgent) => {
+						runIdsObservedAtResumeStart.push(resumedAgent.getLifecycleRunV2().run_id);
+					},
+				},
+			}),
+		});
+		const session = createMockSession();
+		const stub = createSubagentSessionStub(session);
+		agent.subagentSession = toSubagentSession(stub);
+
+		await agent.run();
+		const initialRun: SubagentLifecycleRunV2 = agent.getLifecycleRunV2();
+		await agent.resume("continue");
+		const resumedRun: SubagentLifecycleRunV2 = agent.getLifecycleRunV2();
+
+		expect(initialRun.task_id).toBe("task-123");
+		expect(resumedRun.task_id).toBe("task-123");
+		expect(initialRun.run_id).not.toBe(resumedRun.run_id);
+		expect(initialRun.compaction).toEqual({ state: "idle", count: 0, started_at: null, last_outcome: null });
+		expect(resumedRun.compaction).toEqual({ state: "idle", count: 0, started_at: null, last_outcome: null });
+		expect(runIdsObservedAtResumeStart).toEqual([resumedRun.run_id]);
+	});
+
+	it("projects only resolved model and source-backed timing, using null when values are unavailable", () => {
+		const completed = makeSubagent({
+			id: "task-completed",
+			execution: makeStubExecution({ model: makeModel({ provider: "anthropic", id: "claude-opus", name: "Claude Opus" }) }),
+			status: "completed",
+			startedAt: 1_000,
+			completedAt: 2_500,
+		});
+		const { run_id: completedRunId, ...completedProjection } = completed.getLifecycleRunV2();
+
+		expect(completedRunId).not.toBe("");
+		expect(completedProjection).toEqual({
+			task_id: "task-completed",
+			model: { provider: "anthropic", id: "claude-opus", name: "Claude Opus" },
+			started_at: "1970-01-01T00:00:01.000Z",
+			finished_at: "1970-01-01T00:00:02.500Z",
+			duration_ms: 1_500,
+			compaction: { state: "idle", count: 0, started_at: null, last_outcome: null },
+		});
+
+		const running = makeSubagent({ id: "task-running", status: "running", startedAt: 4_000 });
+		const { run_id: runningRunId, ...runningProjection } = running.getLifecycleRunV2();
+
+		expect(runningRunId).not.toBe("");
+		expect(runningProjection).toEqual({
+			task_id: "task-running",
+			model: null,
+			started_at: "1970-01-01T00:00:04.000Z",
+			finished_at: null,
+			duration_ms: null,
+			compaction: { state: "idle", count: 0, started_at: null, last_outcome: null },
+		});
+	});
+
+	it("applies compaction transitions before forwarding them to the lifecycle observer", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(1_000);
+			const session = createMockSession();
+			const stub = createSubagentSessionStub(session);
+			const seen: Array<{ transition: CompactionTransitionV2; compaction: SourceCompactionV2 }> = [];
+			const onCompacted = vi.fn();
+			stub.runTurnLoop.mockImplementation(async () => {
+				session.emit({ type: "compaction_start", reason: "threshold" });
+				session.emit({ type: "compaction_end", aborted: false, result: { tokensBefore: 123 }, reason: "threshold" });
+				session.emit({ type: "compaction_end", aborted: false, errorMessage: "summary failed", reason: "overflow" });
+				session.emit({ type: "compaction_end", aborted: true, reason: "manual" });
+				return { responseText: "done", aborted: false, steered: false };
+			});
+			const agent = new Subagent({
+				id: "transition-task",
+				type: "general-purpose",
+				description: "transition test",
+				execution: makeStubExecution({
+					createSubagentSession: async () => toSubagentSession(stub),
+					observer: {
+						onCompactionTransition: (observedAgent, transition) => {
+							seen.push({ transition, compaction: observedAgent.getLifecycleRunV2().compaction });
+						},
+						onCompacted,
+					},
+				}),
+			});
+
+			await agent.run();
+
+			expect(seen).toEqual([
+				{
+					transition: { type: "start", started_at: "1970-01-01T00:00:01.000Z" },
+					compaction: { state: "compacting", count: 0, started_at: "1970-01-01T00:00:01.000Z", last_outcome: null },
+				},
+				{
+					transition: { type: "completed" },
+					compaction: { state: "idle", count: 1, started_at: null, last_outcome: "completed" },
+				},
+				{
+					transition: { type: "failed" },
+					compaction: { state: "idle", count: 1, started_at: null, last_outcome: "failed" },
+				},
+				{
+					transition: { type: "aborted" },
+					compaction: { state: "idle", count: 1, started_at: null, last_outcome: "aborted" },
+				},
+			]);
+			expect(onCompacted).toHaveBeenCalledExactlyOnceWith(agent, { reason: "threshold", tokensBefore: 123 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	const priorRunScenarios: Array<{
+		name: string;
+		events: unknown[];
+		expectedCompaction: SourceCompactionV2;
+		expectedLegacyCount: number;
+	}> = [
+		{
+			name: "completed",
+			events: [
+				{ type: "compaction_start", reason: "threshold" },
+				{ type: "compaction_end", aborted: false, result: { tokensBefore: 123 }, reason: "threshold" },
+			],
+			expectedCompaction: { state: "idle", count: 1, started_at: null, last_outcome: "completed" },
+			expectedLegacyCount: 1,
+		},
+		{
+			name: "failed",
+			events: [
+				{ type: "compaction_start", reason: "overflow" },
+				{ type: "compaction_end", aborted: false, errorMessage: "summary failed", reason: "overflow" },
+			],
+			expectedCompaction: { state: "idle", count: 0, started_at: null, last_outcome: "failed" },
+			expectedLegacyCount: 0,
+		},
+		{
+			name: "aborted",
+			events: [
+				{ type: "compaction_start", reason: "manual" },
+				{ type: "compaction_end", aborted: true, reason: "manual" },
+			],
+			expectedCompaction: { state: "idle", count: 0, started_at: null, last_outcome: "aborted" },
+			expectedLegacyCount: 0,
+		},
+		{
+			name: "unmatched start",
+			events: [{ type: "compaction_start", reason: "threshold" }],
+			expectedCompaction: { state: "compacting", count: 0, started_at: "1970-01-01T00:00:01.000Z", last_outcome: null },
+			expectedLegacyCount: 0,
+		},
+	];
+
+	for (const scenario of priorRunScenarios) {
+		it(`replaces ${scenario.name} compaction state with a fresh resumed run`, async () => {
+			vi.useFakeTimers();
+			try {
+				vi.setSystemTime(1_000);
+				const session = createMockSession();
+				const stub = createSubagentSessionStub(session);
+				stub.runTurnLoop.mockImplementation(async () => {
+					for (const event of scenario.events) session.emit(event);
+					return { responseText: "first", aborted: false, steered: false };
+				});
+				const agent = new Subagent({
+					id: "same-task",
+					type: "general-purpose",
+					description: "resume compaction test",
+					execution: makeStubExecution({ createSubagentSession: async () => toSubagentSession(stub) }),
+				});
+
+				await agent.run();
+				const previousRun = agent.getLifecycleRunV2();
+				const previousRunBeforeResume = structuredClone(previousRun);
+				expect(previousRun.compaction).toEqual(scenario.expectedCompaction);
+
+				vi.setSystemTime(2_000);
+				await agent.resume("continue");
+				const resumedRun = agent.getLifecycleRunV2();
+
+				expect(resumedRun.task_id).toBe(previousRun.task_id);
+				expect(resumedRun.run_id).not.toBe(previousRun.run_id);
+				expect(resumedRun.compaction).toEqual({ state: "idle", count: 0, started_at: null, last_outcome: null });
+				expect(previousRun).toEqual(previousRunBeforeResume);
+				expect(agent.compactionCount).toBe(scenario.expectedLegacyCount);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	}
+
+	it("captures the child session model before notifying onSessionCreated", async () => {
+		const resolvedModel = makeModel({ provider: "openai", id: "gpt-5.6", name: "GPT-5.6" });
+		const expectedModel: SourceModelV2 = { provider: "openai", id: "gpt-5.6", name: "GPT-5.6" };
+		const session = createMockSession({ model: resolvedModel });
+		const stub = createSubagentSessionStub(session);
+		const modelsAtSessionCreation: Array<SourceModelV2 | null> = [];
+		const agent = new Subagent({
+			id: "resolved-model",
+			type: "general-purpose",
+			description: "resolved model test",
+			execution: makeStubExecution({
+				model: undefined,
+				createSubagentSession: async () => toSubagentSession(stub),
+				observer: {
+					onSessionCreated: (createdAgent) => modelsAtSessionCreation.push(createdAgent.getLifecycleRunV2().model),
+				},
+			}),
+		});
+
+		expect(agent.getLifecycleRunV2().model).toBeNull();
+		await agent.run();
+		expect(modelsAtSessionCreation).toEqual([expectedModel]);
+		expect(agent.getLifecycleRunV2().model).toEqual(expectedModel);
+	});
+
+	it("replaces a requested model with the actual child session model", async () => {
+		const requestedModel = makeModel({ provider: "anthropic", id: "claude-opus", name: "Claude Opus" });
+		const resolvedModel = makeModel({ provider: "openai", id: "gpt-5.6", name: "GPT-5.6" });
+		const session = createMockSession({ model: resolvedModel });
+		const stub = createSubagentSessionStub(session);
+		const agent = new Subagent({
+			id: "conflicting-model",
+			type: "general-purpose",
+			description: "conflicting model test",
+			execution: makeStubExecution({
+				model: requestedModel,
+				createSubagentSession: async () => toSubagentSession(stub),
+			}),
+		});
+
+		await agent.run();
+		expect(agent.getLifecycleRunV2().model).toEqual({ provider: "openai", id: "gpt-5.6", name: "GPT-5.6" });
+	});
+});
 
 describe("Subagent.resume() — happy path", () => {
 	it("transitions to completed and sets result from the resume response", async () => {

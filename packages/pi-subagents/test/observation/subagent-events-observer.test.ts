@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildEventData, type NotificationSystem } from "#src/observation/notification";
 import { SubagentEventsObserver } from "#src/observation/subagent-events-observer";
-import type { CompactionInfo } from "#src/types";
+import type { CompactionInfo, SubagentLifecycleDeltaV2 } from "#src/types";
 import { createTestSubagent } from "#test/helpers/make-subagent";
 
 function makeNotifications(): NotificationSystem {
@@ -215,6 +215,28 @@ describe("SubagentEventsObserver", () => {
 			const { observer, appendEntry, notifications } = makeObserver();
 			const info: CompactionInfo = { reason: "manual", tokensBefore: 1000 };
 			observer.onSubagentCompacted(createTestSubagent(), info);
+			expect(appendEntry).not.toHaveBeenCalled();
+			expect(notifications.sendCompletion).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("onLifecycleV2", () => {
+		it("emits the exact delta without persisting or notifying", () => {
+			const { observer, emit, appendEntry, notifications } = makeObserver();
+			const delta: SubagentLifecycleDeltaV2 = Object.freeze({
+				protocol: "mecha.children/v1",
+				owner_session_id: "owner-session",
+				sequence: 4,
+				task_id: "task-1",
+				run_id: "run-1",
+				parent_entry_id: "entry-1",
+				context_ref: null,
+				changes: Object.freeze({ lifecycle_state: "running" }),
+			});
+
+			observer.onLifecycleV2(delta);
+
+			expect(emit).toHaveBeenCalledExactlyOnceWith("subagents:lifecycle-v2", delta);
 			expect(appendEntry).not.toHaveBeenCalled();
 			expect(notifications.sendCompletion).not.toHaveBeenCalled();
 		});

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SubagentState } from "#src/lifecycle/subagent-state";
 import { subscribeSubagentObserver } from "#src/observation/record-observer";
+import type { CompactionTransitionV2 } from "#src/types";
 import { createMockSession } from "#test/helpers/mock-session";
 
 function makeState() {
@@ -8,6 +9,88 @@ function makeState() {
 }
 
 describe("subscribeSubagentObserver", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("compaction transitions", () => {
+    it("emits explicit source transitions in order while preserving successful legacy behavior", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const session = createMockSession();
+      const state = makeState();
+      const transitions: CompactionTransitionV2[] = [];
+      const onCompact = vi.fn();
+      subscribeSubagentObserver(session, state, {
+        onCompactionTransition: (transition) => transitions.push(transition),
+        onCompact,
+      });
+
+      session.emit({ type: "compaction_start", reason: "threshold" });
+      session.emit({
+        type: "compaction_end",
+        aborted: false,
+        result: { tokensBefore: 12_345 },
+        reason: "threshold",
+      });
+      session.emit({
+        type: "compaction_end",
+        aborted: false,
+        errorMessage: "summary request failed",
+        reason: "overflow",
+      });
+      session.emit({ type: "compaction_end", aborted: true, reason: "manual" });
+
+      expect(transitions).toEqual([
+        { type: "start", started_at: "1970-01-01T00:00:01.000Z" },
+        { type: "completed" },
+        { type: "failed" },
+        { type: "aborted" },
+      ]);
+      expect(state.compactionCount).toBe(1);
+      expect(onCompact).toHaveBeenCalledExactlyOnceWith({ reason: "threshold", tokensBefore: 12_345 });
+    });
+
+    it("does not emit a terminal transition or invent an outcome when compaction has no end", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const session = createMockSession();
+      const state = makeState();
+      const transitions: CompactionTransitionV2[] = [];
+      subscribeSubagentObserver(session, state, {
+        onCompactionTransition: (transition) => transitions.push(transition),
+      });
+
+      session.emit({ type: "compaction_start", reason: "threshold" });
+
+      expect(transitions).toEqual([{ type: "start", started_at: "1970-01-01T00:00:01.000Z" }]);
+      expect(state.compactionCount).toBe(0);
+    });
+
+    it("classifies a non-aborted result-less end as failed without affecting successful-compaction callbacks", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const session = createMockSession();
+      const state = makeState();
+      const transitions: CompactionTransitionV2[] = [];
+      const onCompact = vi.fn();
+      subscribeSubagentObserver(session, state, {
+        onCompactionTransition: (transition) => transitions.push(transition),
+        onCompact,
+      });
+
+      session.emit({ type: "compaction_start", reason: "threshold" });
+      session.emit({ type: "compaction_end", aborted: false, reason: "threshold" });
+
+      expect(transitions).toEqual([
+        { type: "start", started_at: "1970-01-01T00:00:01.000Z" },
+        { type: "failed" },
+      ]);
+      expect(state.compactionCount).toBe(0);
+      expect(onCompact).not.toHaveBeenCalled();
+    });
+  });
+
   it("increments state.toolUses on tool_execution_end", () => {
     const session = createMockSession();
     const state = makeState();

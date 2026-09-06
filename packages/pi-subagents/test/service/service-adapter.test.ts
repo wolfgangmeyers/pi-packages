@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
-import type { SubagentsService } from "#src/service/service";
+import { createSubagentRuntime, type SubagentRuntime } from "#src/runtime";
+import type {
+  ContextRefV1,
+  ControlResultPayloadV1,
+  LifecycleSnapshotV2ServiceResult,
+  SubagentsService,
+} from "#src/service/service";
 import type { ServiceRuntimeLike, SubagentManagerLike } from "#src/service/service-adapter";
 import { SubagentsServiceAdapter, toSubagentRecord } from "#src/service/service-adapter";
 import type { SessionContext, Subagent } from "#src/types";
@@ -114,6 +120,7 @@ function makeStubCtx(): SessionContext {
     sessionManager: {
       getSessionFile: () => undefined,
       getSessionId: () => "stub-session",
+      getLeafId: () => "stub-leaf-entry",
       getBranch: () => [],
     },
   };
@@ -127,6 +134,11 @@ function makeRuntimeStub(override: Partial<ServiceRuntimeLike> = {}): ServiceRun
   return {
     currentCtx: makeStubCtx(),
     buildSnapshot: vi.fn((_: boolean): ParentSnapshot => STUB_SNAPSHOT),
+    getServiceParentSessionInfo: vi.fn(() => Object.freeze({
+      parentSessionFile: "/sessions/stub.jsonl",
+      parentSessionId: "stub-session",
+      parentEntryId: "stub-leaf-entry",
+    })),
     ...override,
   };
 }
@@ -138,6 +150,12 @@ function makeRuntimeStub(override: Partial<ServiceRuntimeLike> = {}): ServiceRun
  * (`mockReturnValue`, `mockImplementation`); configure per-test behavior on the
  * returned object's fields.
  */
+function createActiveRuntime(ctx: SessionContext = makeStubCtx()): SubagentRuntime {
+  const runtime = createSubagentRuntime();
+  runtime.setSessionContext(ctx);
+  return runtime;
+}
+
 function createManagerStub() {
   return {
     spawn: vi.fn<SubagentManagerLike["spawn"]>(() => "spawned-id"),
@@ -148,6 +166,8 @@ function createManagerStub() {
     registerWorkspaceProvider: vi.fn<SubagentManagerLike["registerWorkspaceProvider"]>(() => () => {}),
     subscribeLifecycle: vi.fn<SubagentManagerLike["subscribeLifecycle"]>(() => () => {}),
     getLifecycleSnapshots: vi.fn<SubagentManagerLike["getLifecycleSnapshots"]>(() => []),
+    getLifecycleSnapshotV2: vi.fn<SubagentManagerLike["getLifecycleSnapshotV2"]>(),
+    appendControlResultV1: vi.fn<SubagentManagerLike["appendControlResultV1"]>(),
   };
 }
 
@@ -209,15 +229,85 @@ describe("SubagentsServiceAdapter — getRecord and listAgents", () => {
 });
 
 describe("SubagentsServiceAdapter — spawn", () => {
-  it("throws when currentCtx is undefined (no active session)", () => {
-    const svc = new SubagentsServiceAdapter(
-      createManagerStub(),
-      vi.fn(),
-      makeRuntimeStub({ currentCtx: undefined }),
-    );
+  it("passes immutable source-backed session and leaf identity to manager.spawn", () => {
+    const manager = createManagerStub();
+    const runtime = createActiveRuntime({
+      ...makeStubCtx(),
+      sessionManager: {
+        getSessionFile: () => "/sessions/parent.jsonl",
+        getSessionId: () => "owner-session-id",
+        getLeafId: () => "persisted-leaf-entry-id",
+        getBranch: () => [],
+      },
+    });
+    vi.spyOn(runtime, "buildSnapshot").mockReturnValue(STUB_SNAPSHOT);
+    const svc = new SubagentsServiceAdapter(manager, vi.fn(), runtime);
+
+    svc.spawn("Plan", "do something");
+
+    const options = manager.spawn.mock.calls[0][3] as { parentSession?: unknown };
+    expect(options.parentSession).toEqual({
+      parentSessionFile: "/sessions/parent.jsonl",
+      parentSessionId: "owner-session-id",
+      parentEntryId: "persisted-leaf-entry-id",
+    });
+    expect(Object.isFrozen(options.parentSession)).toBe(true);
+    expect(options.parentSession).not.toHaveProperty("toolCallId");
+  });
+
+  it("rejects without an active context before snapshot or manager mutation", () => {
+    const manager = createManagerStub();
+    const runtime = createSubagentRuntime();
+    const buildSnapshot = vi.spyOn(runtime, "buildSnapshot").mockReturnValue(STUB_SNAPSHOT);
+    const svc = new SubagentsServiceAdapter(manager, vi.fn(), runtime);
+
     expect(() => svc.spawn("Plan", "do something")).toThrow(
-      /no active session/i,
+      "Cannot spawn a V2-tracked subagent without an active parent session.",
     );
+    expect(buildSnapshot).not.toHaveBeenCalled();
+    expect(manager.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects without a session ID before snapshot or manager mutation", () => {
+    const manager = createManagerStub();
+    const runtime = createActiveRuntime({
+      ...makeStubCtx(),
+      sessionManager: {
+        getSessionFile: () => "/sessions/parent.jsonl",
+        getSessionId: () => "",
+        getLeafId: () => "persisted-leaf-entry-id",
+        getBranch: () => [],
+      },
+    });
+    const buildSnapshot = vi.spyOn(runtime, "buildSnapshot").mockReturnValue(STUB_SNAPSHOT);
+    const svc = new SubagentsServiceAdapter(manager, vi.fn(), runtime);
+
+    expect(() => svc.spawn("Plan", "do something")).toThrow(
+      "Cannot spawn a V2-tracked subagent without an active parent session.",
+    );
+    expect(buildSnapshot).not.toHaveBeenCalled();
+    expect(manager.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects without a persisted leaf before snapshot or manager mutation", () => {
+    const manager = createManagerStub();
+    const runtime = createActiveRuntime({
+      ...makeStubCtx(),
+      sessionManager: {
+        getSessionFile: () => "/sessions/parent.jsonl",
+        getSessionId: () => "owner-session-id",
+        getLeafId: () => null,
+        getBranch: () => [],
+      },
+    });
+    const buildSnapshot = vi.spyOn(runtime, "buildSnapshot").mockReturnValue(STUB_SNAPSHOT);
+    const svc = new SubagentsServiceAdapter(manager, vi.fn(), runtime);
+
+    expect(() => svc.spawn("Plan", "do something")).toThrow(
+      "Cannot spawn a V2-tracked subagent without a persisted parent session entry.",
+    );
+    expect(buildSnapshot).not.toHaveBeenCalled();
+    expect(manager.spawn).not.toHaveBeenCalled();
   });
 
   it("resolves string model names via resolveModel", () => {
@@ -278,6 +368,11 @@ describe("SubagentsServiceAdapter — spawn", () => {
       thinkingLevel: undefined,
       inheritContext: undefined,
       bypassQueue: true,
+      parentSession: {
+        parentSessionFile: "/sessions/stub.jsonl",
+        parentSessionId: "stub-session",
+        parentEntryId: "stub-leaf-entry",
+      },
     });
   });
 
@@ -399,6 +494,18 @@ describe("SubagentsServiceAdapter — registerWorkspaceProvider", () => {
   });
 });
 
+function makeLifecycleSnapshotV2(): LifecycleSnapshotV2ServiceResult {
+  const snapshot: LifecycleSnapshotV2ServiceResult = {
+    protocol: "mecha.children/v1",
+    snapshot_id: "snapshot-1",
+    owner_session_id: "owner-session",
+    sequence: 3,
+    runs: [],
+  };
+  Object.freeze(snapshot.runs);
+  return Object.freeze(snapshot);
+}
+
 describe("SubagentsServiceAdapter — lifecycle", () => {
   it("delegates lifecycle subscriptions and returns the manager disposer", () => {
     const disposer = vi.fn();
@@ -411,6 +518,47 @@ describe("SubagentsServiceAdapter — lifecycle", () => {
 
     expect(mgr.subscribeLifecycle).toHaveBeenCalledExactlyOnceWith(listener);
     expect(result).toBe(disposer);
+  });
+
+  it("delegates an owner-scoped V2 snapshot without consulting or changing runtime state", () => {
+    const snapshot = makeLifecycleSnapshotV2();
+    const runtime = makeRuntimeStub();
+    const mgr = createManagerStub();
+    mgr.getLifecycleSnapshotV2.mockReturnValue(snapshot);
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), runtime);
+
+    expect(svc.getLifecycleSnapshotV2("owner-session")).toBe(snapshot);
+    expect(mgr.getLifecycleSnapshotV2).toHaveBeenCalledExactlyOnceWith("owner-session");
+    expect(runtime.buildSnapshot).not.toHaveBeenCalled();
+    expect(runtime.getServiceParentSessionInfo).not.toHaveBeenCalled();
+    expect(Object.isFrozen(snapshot)).toBe(true);
+  });
+
+  it("delegates a control result unchanged without resolving runtime or parent state", async () => {
+    const runtime = makeRuntimeStub();
+    const mgr = createManagerStub();
+    const payload: ControlResultPayloadV1 = {
+      protocol: "mecha.control/v1",
+      result_id: "00000000-0000-4000-8000-000000000001",
+      request_id: "00000000-0000-4000-8000-000000000002",
+      target_session_epoch: 1,
+      runtime_generation: "00000000-0000-4000-8000-000000000003",
+      manifest_sha256: "a".repeat(64),
+      status: "ok",
+      content: "done",
+      details: {},
+    };
+    const contextRef: ContextRefV1 = "ctx1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+    mgr.appendControlResultV1.mockResolvedValue({ kind: "accepted", result_id: payload.result_id });
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), runtime);
+
+    await expect(svc.appendControlResultV1(contextRef, payload)).resolves.toEqual({
+      kind: "accepted",
+      result_id: payload.result_id,
+    });
+    expect(mgr.appendControlResultV1).toHaveBeenCalledExactlyOnceWith(contextRef, payload);
+    expect(runtime.buildSnapshot).not.toHaveBeenCalled();
+    expect(runtime.getServiceParentSessionInfo).not.toHaveBeenCalled();
   });
 
   it("returns the manager's active lifecycle snapshots", () => {

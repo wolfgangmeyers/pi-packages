@@ -14,6 +14,12 @@ function makeCtx(overrides: Record<string, unknown> = {}) {
 }
 
 function makeTool(deps: ReturnType<typeof createToolDeps>) {
+	deps.runtime.getToolParentSessionInfo ??= vi.fn((toolCallId: string) => Object.freeze({
+			parentSessionFile: "/sessions/parent.jsonl",
+			parentSessionId: "session-1",
+			parentEntryId: "assistant-entry-1",
+			toolCallId,
+		}));
 	return new AgentTool(deps.manager, deps.runtime, deps.settings, deps.registry, deps.agentDir);
 }
 
@@ -155,6 +161,8 @@ describe("AgentTool — resume path", () => {
 		const pendingResume = Promise.withResolvers<Subagent | undefined>();
 		deps.manager.resume = vi.fn().mockReturnValue(pendingResume.promise);
 		const toolSignal = new AbortController().signal;
+		const resolveToolParentSession = vi.fn();
+		deps.runtime.getToolParentSessionInfo = resolveToolParentSession;
 
 		const result = await execute(deps, {
 			prompt: "continue",
@@ -165,6 +173,7 @@ describe("AgentTool — resume path", () => {
 
 		expect(result.content[0].text).toBe('Resumed agent "agent-1" in the background.');
 		expect(deps.manager.resume).toHaveBeenCalledExactlyOnceWith("agent-1", "continue");
+		expect(resolveToolParentSession).not.toHaveBeenCalled();
 		expect(resumeRecord.consumed).toBe(false);
 	});
 });
@@ -197,16 +206,89 @@ describe("AgentTool — background execution", () => {
 		expect(text).toContain("bg task");
 	});
 
-	it("passes parentSession.toolCallId to manager.spawn", async () => {
+	it("binds a new spawn to the exact persisted assistant entry", async () => {
 		const deps = createToolDeps();
+		const parentSession = Object.freeze({
+			parentSessionFile: "/sessions/parent.jsonl",
+			parentSessionId: "session-1",
+			parentEntryId: "assistant-entry-42",
+			toolCallId: "tc-1",
+		});
+		const resolveToolParentSession = vi.fn(() => parentSession);
+		deps.runtime.getToolParentSessionInfo = resolveToolParentSession;
 		deps.manager.getRecord = vi.fn().mockReturnValue(createTestSubagent({ status: "running" }));
+
 		await execute(deps, {
 			prompt: "do something",
 			description: "bg task",
 			subagent_type: "general-purpose",
 		});
+
 		const spawnOpts = (deps.manager.spawn as ReturnType<typeof vi.fn>).mock.calls[0][3];
-		expect(spawnOpts.parentSession?.toolCallId).toBe("tc-1");
+		expect(resolveToolParentSession).toHaveBeenCalledExactlyOnceWith("tc-1");
+		expect(spawnOpts.parentSession).toBe(parentSession);
+		expect(spawnOpts.parentSession).toEqual({
+			parentSessionFile: "/sessions/parent.jsonl",
+			parentSessionId: "session-1",
+			parentEntryId: "assistant-entry-42",
+			toolCallId: "tc-1",
+		});
+		expect(spawnOpts.parentSession.parentEntryId).not.toBe("tc-1");
+		expect(Object.isFrozen(spawnOpts.parentSession)).toBe(true);
+	});
+
+	it("fails before manager mutation when no persisted assistant entry matches the tool call", async () => {
+		const deps = createToolDeps();
+		deps.runtime.getToolParentSessionInfo = vi.fn(() => {
+			throw new Error("Cannot spawn a subagent without a matching persisted assistant entry for the current tool call.");
+		});
+
+		const result = await execute(deps, {
+			prompt: "do something",
+			description: "bg task",
+			subagent_type: "general-purpose",
+		});
+
+		expect(result.content[0].text).toBe(
+			"Cannot spawn a subagent without a matching persisted assistant entry for the current tool call.",
+		);
+		expect(deps.manager.spawn).not.toHaveBeenCalled();
+	});
+
+	it("checks the post-yield parent binding before snapshotting a spawn after session teardown", async () => {
+		const deps = createToolDeps();
+		const tool = makeTool(deps);
+		const buildSnapshot = vi.fn(() => {
+			throw new TypeError("Cannot read properties of undefined (reading 'sessionManager')");
+		});
+		const resolveParentAfterTeardown = vi.fn(() => {
+			throw new Error("Cannot spawn a subagent without an active parent session.");
+		});
+		deps.runtime.buildSnapshot = buildSnapshot;
+
+		const pendingResult = tool.execute(
+			"tc-1",
+			{
+				prompt: "do something",
+				description: "bg task",
+				subagent_type: "general-purpose",
+			},
+			new AbortController().signal,
+			vi.fn(),
+			makeCtx(),
+		);
+		// execute yields once before reading the runtime. This replaces the
+		// pre-yield binding with the result of clearing the source context.
+		deps.runtime.getToolParentSessionInfo = resolveParentAfterTeardown;
+
+		const result = await pendingResult;
+
+		expect(result.content[0].text).toBe("Cannot spawn a subagent without an active parent session.");
+		expect(resolveParentAfterTeardown).toHaveBeenCalledExactlyOnceWith("tc-1");
+		expect(buildSnapshot).not.toHaveBeenCalled();
+		expect(deps.manager.spawn).not.toHaveBeenCalled();
+		expect(deps.manager.resume).not.toHaveBeenCalled();
+		expect(deps.manager.getRecord).not.toHaveBeenCalled();
 	});
 
 	it("does not wire the tool-call AbortSignal into a fresh child", async () => {

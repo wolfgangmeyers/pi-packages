@@ -8,7 +8,7 @@
 
 import { buildParentSnapshot, type ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import type { ModelInfo } from "#src/tools/spawn-config";
-import type { SessionContext } from "#src/types";
+import type { ParentSessionInfo, SessionContext } from "#src/types";
 
 /**
  * Narrow config subset read by Agent when driving the turn loop (defaultMaxTurns, graceTurns).
@@ -66,6 +66,110 @@ export class SubagentRuntime {
       parentSessionId: this.currentCtx?.sessionManager.getSessionId() ?? "",
     };
   }
+
+  /**
+   * Bind a direct service spawn to the active persisted session leaf.
+   * Service callers have no tool call to correlate, so the leaf is the authoritative parent entry.
+   */
+  getServiceParentSessionInfo(): ParentSessionInfo {
+    const sessionManager = this.currentCtx?.sessionManager;
+    if (!sessionManager) {
+      throw new Error("Cannot spawn a V2-tracked subagent without an active parent session.");
+    }
+
+    const parentSessionId = sessionManager.getSessionId();
+    if (!isNonEmptyString(parentSessionId)) {
+      throw new Error("Cannot spawn a V2-tracked subagent without an active parent session.");
+    }
+    if (typeof sessionManager.getLeafId !== "function") {
+      throw new Error("Cannot spawn a V2-tracked subagent without a persisted parent session entry.");
+    }
+
+    const parentEntryId = sessionManager.getLeafId();
+    if (!isNonEmptyString(parentEntryId)) {
+      throw new Error("Cannot spawn a V2-tracked subagent without a persisted parent session entry.");
+    }
+
+    const sessionFile = sessionManager.getSessionFile();
+    return Object.freeze({
+      parentSessionFile: typeof sessionFile === "string" ? sessionFile : "",
+      parentSessionId,
+      parentEntryId,
+    });
+  }
+
+  /**
+   * Bind a new tool spawn to the persisted assistant entry that contains its exact tool call.
+   * The tool-call ID remains notification correlation only; it is never used as an entry ID.
+   */
+  getToolParentSessionInfo(toolCallId: string): ParentSessionInfo {
+    const sessionManager = this.currentCtx?.sessionManager;
+    if (!sessionManager) {
+      throw new Error("Cannot spawn a subagent without an active parent session.");
+    }
+    if (
+      typeof sessionManager.getLeafEntry !== "function" ||
+      typeof sessionManager.getEntry !== "function"
+    ) {
+      throw new Error("Cannot spawn a subagent because the active session cannot read persisted entries.");
+    }
+
+    const { parentSessionFile, parentSessionId } = this.getSessionInfo();
+    if (!parentSessionId) {
+      throw new Error("Cannot spawn a subagent without an active parent session.");
+    }
+
+    const visitedEntryIds = new Set<string>();
+    let entry = sessionManager.getLeafEntry();
+    while (isSessionBranchEntry(entry) && !visitedEntryIds.has(entry.id)) {
+      visitedEntryIds.add(entry.id);
+      if (isAssistantToolCallEntry(entry, toolCallId)) {
+        return Object.freeze({
+          parentSessionFile,
+          parentSessionId,
+          parentEntryId: entry.id,
+          toolCallId,
+        });
+      }
+      entry = entry.parentId === null ? undefined : sessionManager.getEntry(entry.parentId);
+    }
+
+    throw new Error("Cannot spawn a subagent without a matching persisted assistant entry for the current tool call.");
+  }
+}
+
+/** The narrow entry shape needed to walk one persisted session branch safely. */
+type SessionBranchEntry = {
+  id: string;
+  parentId: string | null;
+  type: string;
+  message?: unknown;
+};
+
+function isSessionBranchEntry(value: unknown): value is SessionBranchEntry {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    value.id.length > 0 &&
+    (typeof value.parentId === "string" || value.parentId === null) &&
+    typeof value.type === "string"
+  );
+}
+
+function isAssistantToolCallEntry(entry: SessionBranchEntry, toolCallId: string): boolean {
+  if (entry.type !== "message" || !isRecord(entry.message)) return false;
+  if (entry.message.role !== "assistant" || !Array.isArray(entry.message.content)) return false;
+  return entry.message.content.some(
+    (block) => isRecord(block) && block.type === "toolCall" && block.id === toolCallId,
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 /**

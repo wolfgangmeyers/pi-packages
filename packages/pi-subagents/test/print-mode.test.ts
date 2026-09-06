@@ -12,6 +12,7 @@ vi.mock("#src/lifecycle/create-subagent-session", async () => {
 
 import subagentsExtension from "#src/index";
 import { createSubagentSession } from "#src/lifecycle/create-subagent-session";
+import { getSubagentsService } from "#src/service/service";
 import { createMockSession, createSubagentSessionStub, toSubagentSession } from "./helpers/mock-session";
 
 function makePi() {
@@ -62,6 +63,17 @@ function makeHeadlessCtx() {
     sessionManager: {
       getSessionId: vi.fn(() => "session-1"),
       getSessionFile: vi.fn(() => "/sessions/parent.jsonl"),
+      getLeafId: vi.fn(() => "entry-1"),
+      getLeafEntry: vi.fn(() => ({
+        id: "entry-1",
+        parentId: null,
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "tool-call-1" }],
+        },
+      })),
+      getEntry: vi.fn(() => undefined),
       getBranch: vi.fn(() => []),
     },
     getSystemPrompt: vi.fn(() => "parent prompt"),
@@ -106,5 +118,40 @@ describe("print mode background notifications", () => {
     expect(pi.sendMessage).toHaveBeenCalled();
 
     await handlers.get("session_shutdown")?.({}, makeHeadlessCtx());
+  });
+
+  it("bridges manager V2 deltas through the published service and index event observer", async () => {
+    vi.mocked(createSubagentSession).mockResolvedValue(
+      toSubagentSession(createSubagentSessionStub(createMockSession(), "/sessions/child.jsonl")),
+    );
+    const { pi, handlers } = makePi();
+    subagentsExtension(pi);
+    const ctx = makeHeadlessCtx();
+
+    await handlers.get("session_start")?.({ type: "session_start", reason: "startup" }, ctx);
+    const service = getSubagentsService("session-1");
+    expect(service).toBeDefined();
+
+    service!.spawn("general-purpose", "track this lifecycle", { description: "lifecycle bridge" });
+
+    await vi.waitFor(() => {
+      expect(pi.events.emit).toHaveBeenCalledWith(
+        "subagents:lifecycle-v2",
+        expect.objectContaining({
+          protocol: "mecha.children/v1",
+          owner_session_id: "session-1",
+        }),
+      );
+    });
+
+    const lifecycleDelta = pi.events.emit.mock.calls.find(
+      (call: readonly unknown[]) => call[0] === "subagents:lifecycle-v2",
+    )?.[1];
+    expect(lifecycleDelta).toEqual(expect.objectContaining({
+      protocol: "mecha.children/v1",
+      owner_session_id: "session-1",
+    }));
+
+    await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx);
   });
 });

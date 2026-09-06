@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type ContextRefV1,
+  type ControlResultAppendOutcomeV1,
+  type ControlResultPayloadV1,
   getSubagentsService,
+  type LifecycleSnapshotV2ServiceResult,
   publishSubagentsService,
   type SpawnOptions,
   SUBAGENT_EVENTS,
@@ -24,6 +28,7 @@ const PARENT_LIFECYCLE_SNAPSHOTS: readonly SubagentLifecycleSnapshot[] = [
 
 function makeService(
   lifecycleSnapshots: readonly SubagentLifecycleSnapshot[] = [],
+  lifecycleSnapshotV2: LifecycleSnapshotV2ServiceResult = makeLifecycleSnapshotV2(),
 ): SubagentsService {
   return {
     spawn: () => "agent-id",
@@ -34,8 +39,40 @@ function makeService(
     hasRunning: () => false,
     subscribeLifecycle: () => () => undefined,
     getLifecycleSnapshots: () => lifecycleSnapshots,
+    getLifecycleSnapshotV2: () => lifecycleSnapshotV2,
+    appendControlResultV1: async (contextRef: ContextRefV1, payload: ControlResultPayloadV1): Promise<ControlResultAppendOutcomeV1> => ({
+      kind: "accepted",
+      result_id: payload.result_id || contextRef,
+    }),
     registerWorkspaceProvider: () => () => undefined,
   };
+}
+
+function makeLifecycleSnapshotV2(): LifecycleSnapshotV2ServiceResult {
+  const snapshot: LifecycleSnapshotV2ServiceResult = {
+    protocol: "mecha.children/v1",
+    snapshot_id: "snapshot-1",
+    owner_session_id: "parent-session",
+    sequence: 7,
+    runs: [{
+      task_id: "task-1",
+      run_id: "run-1",
+      model: null,
+      started_at: "2026-01-01T00:00:00.000Z",
+      finished_at: null,
+      duration_ms: null,
+      compaction: { state: "idle", count: 0, started_at: null, last_outcome: null },
+      parent_entry_id: "entry-1",
+      description: "track lifecycle",
+      lifecycle_state: "running",
+      sequence: 7,
+      context_ref: null,
+    }],
+  };
+  Object.freeze(snapshot.runs[0].compaction);
+  Object.freeze(snapshot.runs[0]);
+  Object.freeze(snapshot.runs);
+  return Object.freeze(snapshot);
 }
 
 describe("owner-scoped SubagentsService registry", () => {
@@ -61,6 +98,42 @@ describe("owner-scoped SubagentsService registry", () => {
     expect(getSubagentsService("parent-session")?.getLifecycleSnapshots()).toEqual(
       PARENT_LIFECYCLE_SNAPSHOTS,
     );
+  });
+
+  it("preserves the exact immutable V2 snapshot through the owner-scoped registry", () => {
+    const snapshot = makeLifecycleSnapshotV2();
+    const service = makeService([], snapshot);
+
+    publishSubagentsService("parent-session", service);
+
+    const published = getSubagentsService("parent-session");
+    expect(published?.getLifecycleSnapshotV2("parent-session")).toBe(snapshot);
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.runs)).toBe(true);
+    expect(Object.isFrozen(snapshot.runs[0])).toBe(true);
+  });
+
+  it("keeps appendControlResultV1 as the only control-result service operation", async () => {
+    const service = makeService();
+    const payload: ControlResultPayloadV1 = {
+      protocol: "mecha.control/v1",
+      result_id: "00000000-0000-4000-8000-000000000001",
+      request_id: "00000000-0000-4000-8000-000000000002",
+      target_session_epoch: 1,
+      runtime_generation: "00000000-0000-4000-8000-000000000003",
+      manifest_sha256: "a".repeat(64),
+      status: "ok",
+      content: "done",
+      details: {},
+    };
+    const contextRef: ContextRefV1 = "ctx1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+    await expect(service.appendControlResultV1(contextRef, payload)).resolves.toEqual({
+      kind: "accepted",
+      result_id: payload.result_id,
+    });
+    expect(service).not.toHaveProperty("getControlContext");
+    expect(service).not.toHaveProperty("findControlResult");
   });
 
   it("notifies only the replaced owner and ignores stale cleanup", () => {
@@ -292,6 +365,7 @@ describe("SUBAGENT_EVENTS", () => {
     expect(SUBAGENT_EVENTS.COMPACTED).toBe("subagents:compacted");
     expect(SUBAGENT_EVENTS.CREATED).toBe("subagents:created");
     expect(SUBAGENT_EVENTS.STEERED).toBe("subagents:steered");
+    expect(SUBAGENT_EVENTS.LIFECYCLE_V2).toBe("subagents:lifecycle-v2");
   });
 
   it("does not declare a vacant activity channel", () => {

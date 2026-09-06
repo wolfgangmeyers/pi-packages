@@ -1,7 +1,8 @@
 import type { SubagentManagerObserver } from "#src/lifecycle/subagent-manager";
 import { journalSubagentEvent } from "#src/observation/instrumentation";
 import { buildEventData, type NotificationSystem } from "#src/observation/notification";
-import type { CompactionInfo, Subagent } from "#src/types";
+import { SUBAGENT_EVENTS } from "#src/service/service";
+import type { CompactionInfo, Subagent, SubagentLifecycleDeltaV2 } from "#src/types";
 
 /** Emit callback — a subset of `pi.events.emit`. */
 export type EventEmit = (channel: string, data: unknown) => void;
@@ -114,6 +115,10 @@ export class SubagentEventsObserver implements SubagentManagerObserver {
 			kind: record.type,
 			status: record.status,
 		});
+	}
+
+	onLifecycleV2(delta: SubagentLifecycleDeltaV2): void {
+		this.emit(SUBAGENT_EVENTS.LIFECYCLE_V2, delta);
 	}
 
 	onSubagentCreated(record: Subagent): void {

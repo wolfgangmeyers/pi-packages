@@ -1,3 +1,5 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import { createSubagentRuntime, SubagentRuntime } from "#src/runtime";
@@ -25,6 +27,31 @@ function makeSessionCtx(overrides?: Partial<SessionContext>): SessionContext {
       getBranch: () => [],
     },
     ...overrides,
+  };
+}
+
+function makeAssistantToolCallMessage(toolCallIds: readonly string[]): AssistantMessage {
+  return {
+    role: "assistant",
+    content: toolCallIds.map((id) => ({
+      type: "toolCall",
+      id,
+      name: "subagent",
+      arguments: {},
+    })),
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "test-model",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "toolUse",
+    timestamp: 0,
   };
 }
 
@@ -78,6 +105,105 @@ describe("SubagentRuntime session-context methods", () => {
     expect(runtime.currentCtx).toBe(ctx);
     runtime.clearSessionContext();
     expect(runtime.currentCtx).toBeUndefined();
+  });
+});
+
+describe("SubagentRuntime service parent binding", () => {
+  it("uses the active session's persisted leaf without a tool-call fallback", () => {
+    const runtime = createSubagentRuntime();
+    runtime.setSessionContext(makeSessionCtx({
+      sessionManager: {
+        getSessionFile: () => "/sessions/parent.jsonl",
+        getSessionId: () => "owner-session-id",
+        getLeafId: () => "persisted-leaf-entry-id",
+        getBranch: () => [],
+      },
+    }));
+
+    const binding = runtime.getServiceParentSessionInfo();
+
+    expect(binding).toEqual({
+      parentSessionFile: "/sessions/parent.jsonl",
+      parentSessionId: "owner-session-id",
+      parentEntryId: "persisted-leaf-entry-id",
+    });
+    expect(binding).not.toHaveProperty("toolCallId");
+    expect(Object.isFrozen(binding)).toBe(true);
+  });
+
+  it("rejects an active context without a session ID", () => {
+    const runtime = createSubagentRuntime();
+    runtime.setSessionContext(makeSessionCtx({
+      sessionManager: {
+        getSessionFile: () => "/sessions/parent.jsonl",
+        getSessionId: () => "",
+        getLeafId: () => "persisted-leaf-entry-id",
+        getBranch: () => [],
+      },
+    }));
+
+    expect(() => runtime.getServiceParentSessionInfo()).toThrow(
+      "Cannot spawn a V2-tracked subagent without an active parent session.",
+    );
+  });
+
+  it("rejects an active session without a persisted leaf", () => {
+    const runtime = createSubagentRuntime();
+    runtime.setSessionContext(makeSessionCtx({
+      sessionManager: {
+        getSessionFile: () => "/sessions/parent.jsonl",
+        getSessionId: () => "owner-session-id",
+        getLeafId: () => null,
+        getBranch: () => [],
+      },
+    }));
+
+    expect(() => runtime.getServiceParentSessionInfo()).toThrow(
+      "Cannot spawn a V2-tracked subagent without a persisted parent session entry.",
+    );
+  });
+});
+
+describe("SubagentRuntime tool parent binding", () => {
+  it("binds either tool call to its persisted assistant entry after a later custom entry", () => {
+    const sessionManager = SessionManager.inMemory("/test/cwd", { id: "owner-session" });
+    const assistantEntryId = sessionManager.appendMessage(
+      makeAssistantToolCallMessage(["tool-call-one", "tool-call-two"]),
+    );
+    const laterCustomEntryId = sessionManager.appendCustomEntry("test.custom", { marker: "later" });
+    const runtime = createSubagentRuntime();
+    runtime.setSessionContext(makeSessionCtx({ sessionManager }));
+
+    const firstBinding = runtime.getToolParentSessionInfo("tool-call-one");
+    const secondBinding = runtime.getToolParentSessionInfo("tool-call-two");
+
+    expect(firstBinding).toEqual({
+      parentSessionFile: "",
+      parentSessionId: "owner-session",
+      parentEntryId: assistantEntryId,
+      toolCallId: "tool-call-one",
+    });
+    expect(secondBinding).toEqual({
+      parentSessionFile: "",
+      parentSessionId: "owner-session",
+      parentEntryId: assistantEntryId,
+      toolCallId: "tool-call-two",
+    });
+    expect(secondBinding.parentEntryId).not.toBe(laterCustomEntryId);
+    expect(secondBinding.parentEntryId).not.toBe("tool-call-two");
+    expect(Object.isFrozen(secondBinding)).toBe(true);
+  });
+
+  it("fails without a matching assistant tool entry instead of returning a leaf, task, or run id", () => {
+    const sessionManager = SessionManager.inMemory("/test/cwd", { id: "owner-session" });
+    sessionManager.appendMessage(makeAssistantToolCallMessage(["another-tool-call"]));
+    sessionManager.appendCustomEntry("test.custom", { marker: "leaf" });
+    const runtime = createSubagentRuntime();
+    runtime.setSessionContext(makeSessionCtx({ sessionManager }));
+
+    expect(() => runtime.getToolParentSessionInfo("missing-tool-call")).toThrow(
+      "Cannot spawn a subagent without a matching persisted assistant entry for the current tool call.",
+    );
   });
 });
 

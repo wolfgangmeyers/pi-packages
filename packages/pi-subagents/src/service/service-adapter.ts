@@ -9,6 +9,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
 import type {
+  LifecycleSnapshotV2ServiceResult,
   SpawnOptions,
   SubagentLifecycleListener,
   SubagentLifecycleSnapshot,
@@ -16,7 +17,14 @@ import type {
   SubagentsService,
 } from "#src/service/service";
 import type { ModelRegistry } from "#src/session/model-resolver";
-import type { SessionContext, Subagent } from "#src/types";
+import type {
+  ContextRefV1,
+  ControlResultAppendOutcomeV1,
+  ControlResultPayloadV1,
+  ParentSessionInfo,
+  SessionContext,
+  Subagent,
+} from "#src/types";
 
 /** Narrow interface for the SubagentManager — avoids coupling to the concrete class. */
 export interface SubagentManagerLike {
@@ -28,6 +36,11 @@ export interface SubagentManagerLike {
   registerWorkspaceProvider(provider: WorkspaceProvider): () => void;
   subscribeLifecycle(listener: SubagentLifecycleListener): () => void;
   getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[];
+  getLifecycleSnapshotV2(ownerSessionId: string): LifecycleSnapshotV2ServiceResult;
+  appendControlResultV1(
+    contextRef: ContextRefV1,
+    payload: ControlResultPayloadV1,
+  ): Promise<ControlResultAppendOutcomeV1>;
 }
 
 /**
@@ -37,6 +50,7 @@ export interface SubagentManagerLike {
 export interface ServiceRuntimeLike {
   readonly currentCtx: SessionContext | undefined;
   buildSnapshot(inheritContext: boolean): ParentSnapshot;
+  getServiceParentSessionInfo(): ParentSessionInfo;
 }
 
 /** Adapter that wraps SubagentManager to satisfy SubagentsService. */
@@ -48,10 +62,7 @@ export class SubagentsServiceAdapter implements SubagentsService {
   ) {}
 
   spawn(type: string, prompt: string, options?: SpawnOptions): string {
-    if (!this.runtime.currentCtx) {
-      throw new Error("No active session — cannot spawn agents outside a session.");
-    }
-
+    const parentSession = this.runtime.getServiceParentSessionInfo();
     const model = this.resolveModelOption(options?.model);
     const description = options?.description ?? prompt.slice(0, 80);
 
@@ -63,6 +74,7 @@ export class SubagentsServiceAdapter implements SubagentsService {
       thinkingLevel: options?.thinkingLevel,
       inheritContext: options?.inheritContext,
       bypassQueue: options?.bypassQueue,
+      parentSession,
     });
   }
 
@@ -102,6 +114,17 @@ export class SubagentsServiceAdapter implements SubagentsService {
 
   getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[] {
     return this.manager.getLifecycleSnapshots();
+  }
+
+  getLifecycleSnapshotV2(ownerSessionId: string): LifecycleSnapshotV2ServiceResult {
+    return this.manager.getLifecycleSnapshotV2(ownerSessionId);
+  }
+
+  appendControlResultV1(
+    contextRef: ContextRefV1,
+    payload: ControlResultPayloadV1,
+  ): Promise<ControlResultAppendOutcomeV1> {
+    return this.manager.appendControlResultV1(contextRef, payload);
   }
 
   /** Resolve an optional model-string override against the current session's registry. */

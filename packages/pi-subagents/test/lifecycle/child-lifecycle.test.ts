@@ -7,7 +7,10 @@ import {
   SUBAGENT_CHILD_SESSION_CREATED,
   SUBAGENT_CHILD_SPAWNING,
 } from "#src/lifecycle/child-lifecycle";
-import { unpublishCurrentSubagentsService } from "#src/service/owner-service-cleanup";
+import {
+  registerSubagentsServiceOwnerRelease,
+  unpublishCurrentSubagentsService,
+} from "#src/service/owner-service-cleanup";
 import {
   getSubagentsService,
   publishSubagentsService,
@@ -102,6 +105,49 @@ describe("createChildLifecyclePublisher", () => {
     unsubscribe();
   });
 
+  it("releases the current child owner once with disposed-child before unpublishing", () => {
+    const childService = makeService();
+    const releaseOwner = vi.fn();
+    publishSubagentsService("child-session-abc", childService);
+    registerSubagentsServiceOwnerRelease(childService, releaseOwner);
+
+    unpublishCurrentSubagentsService("child-session-abc");
+    unpublishCurrentSubagentsService("child-session-abc");
+
+    expect(releaseOwner).toHaveBeenCalledExactlyOnceWith("disposed-child");
+    expect(getSubagentsService("child-session-abc")).toBeUndefined();
+  });
+
+  it("unpublishes the current child service when its owner release throws", () => {
+    const childService = makeService();
+    const releaseError = new Error("owner release failed");
+    publishSubagentsService("child-session-abc", childService);
+    registerSubagentsServiceOwnerRelease(childService, () => {
+      throw releaseError;
+    });
+
+    expect(() => unpublishCurrentSubagentsService("child-session-abc")).toThrow(releaseError);
+    expect(getSubagentsService("child-session-abc")).toBeUndefined();
+  });
+
+  it("does not let a stale child registration remove a replacement cleanup callback", () => {
+    const oldService = makeService();
+    const replacementService = makeService();
+    const oldRelease = vi.fn();
+    const replacementRelease = vi.fn();
+    const unregisterOld = registerSubagentsServiceOwnerRelease(oldService, oldRelease);
+    publishSubagentsService("child-session-abc", oldService);
+    publishSubagentsService("child-session-abc", replacementService);
+    registerSubagentsServiceOwnerRelease(replacementService, replacementRelease);
+
+    unregisterOld();
+    unpublishCurrentSubagentsService("child-session-abc");
+
+    expect(oldRelease).not.toHaveBeenCalled();
+    expect(replacementRelease).toHaveBeenCalledExactlyOnceWith("disposed-child");
+    expect(getSubagentsService("child-session-abc")).toBeUndefined();
+  });
+
   it("treats cleanup for an unpublished child as a no-op", () => {
     expect(() =>
       unpublishCurrentSubagentsService("missing-child-session"),
@@ -153,6 +199,14 @@ function makeService(): SubagentsService {
     hasRunning: () => false,
     subscribeLifecycle: () => () => undefined,
     getLifecycleSnapshots: () => [],
+    getLifecycleSnapshotV2: () => ({
+      protocol: "mecha.children/v1",
+      snapshot_id: "snapshot-1",
+      owner_session_id: "owner-session",
+      sequence: 0,
+      runs: [],
+    }),
+    appendControlResultV1: async (_contextRef, payload) => ({ kind: "accepted", result_id: payload.result_id }),
     registerWorkspaceProvider: () => () => undefined,
   };
 }

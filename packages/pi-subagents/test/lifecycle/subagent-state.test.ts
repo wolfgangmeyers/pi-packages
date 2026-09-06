@@ -315,6 +315,16 @@ describe("SubagentState — incrementCompactions", () => {
 	});
 });
 
+describe("SubagentState — compaction aggregate compatibility", () => {
+	it("keeps successful compactionCount as a lifetime aggregate after resume reset", () => {
+		const state = new SubagentState({ status: "completed" });
+		state.incrementCompactions();
+		state.resetForResume(9_000);
+
+		expect(state.compactionCount).toBe(1);
+	});
+});
+
 describe("SubagentState — resetForResume", () => {
 	it("sets status to 'running' and new startedAt", () => {
 		const state = new SubagentState({ status: "completed", startedAt: 1000 });
