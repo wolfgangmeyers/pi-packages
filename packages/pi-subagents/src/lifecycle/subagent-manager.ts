@@ -766,6 +766,19 @@ export class SubagentManager {
   }
 
   /**
+   * Return a reference only when this owner still owns that exact live child session.
+   * The session identity is an internal Pi object boundary; callers receive no manager or child session.
+   */
+  getChildContextRefV1(ownerSessionId: string, childSessionId: string): ContextRefV1 | undefined {
+    if (typeof ownerSessionId !== "string" || typeof childSessionId !== "string" || childSessionId.length === 0) return undefined;
+    for (const [contextRef, binding] of this.controlContextsByRef) {
+      if (binding.ownerSessionId !== ownerSessionId || binding.childSession.sessionId !== childSessionId) continue;
+      return this.getLiveControlContext(contextRef) === binding ? contextRef : undefined;
+    }
+    return undefined;
+  }
+
+  /**
    * Append a closed control result to the one live child identified by a manager-issued reference.
    * The binding is checked before touching history so stale calls cannot fall back to the parent.
    */

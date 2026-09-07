@@ -167,6 +167,7 @@ function createManagerStub() {
     subscribeLifecycle: vi.fn<SubagentManagerLike["subscribeLifecycle"]>(() => () => {}),
     getLifecycleSnapshots: vi.fn<SubagentManagerLike["getLifecycleSnapshots"]>(() => []),
     getLifecycleSnapshotV2: vi.fn<SubagentManagerLike["getLifecycleSnapshotV2"]>(),
+    getChildContextRefV1: vi.fn<SubagentManagerLike["getChildContextRefV1"]>(),
     appendControlResultV1: vi.fn<SubagentManagerLike["appendControlResultV1"]>(),
     registerChildExtensionV1: vi.fn<SubagentManagerLike["registerChildExtensionV1"]>(() => () => {}),
   };
@@ -533,6 +534,19 @@ describe("SubagentsServiceAdapter — lifecycle", () => {
     expect(runtime.buildSnapshot).not.toHaveBeenCalled();
     expect(runtime.getServiceParentSessionInfo).not.toHaveBeenCalled();
     expect(Object.isFrozen(snapshot)).toBe(true);
+  });
+
+  it("delegates the exact child-session context lookup through the owner-bound adapter", () => {
+    const runtime = makeRuntimeStub();
+    const mgr = createManagerStub();
+    const contextRef: ContextRefV1 = "ctx1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+    mgr.getChildContextRefV1.mockReturnValue(contextRef);
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), runtime);
+
+    expect(svc.getChildContextRefV1("child-session")).toBe(contextRef);
+    expect(mgr.getChildContextRefV1).toHaveBeenCalledExactlyOnceWith("stub-session", "child-session");
+    expect(runtime.buildSnapshot).not.toHaveBeenCalled();
+    expect(runtime.getServiceParentSessionInfo).not.toHaveBeenCalled();
   });
 
   it("delegates a control result unchanged without resolving runtime or parent state", async () => {

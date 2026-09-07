@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConcurrencyLimiter } from "#src/lifecycle/concurrency-limiter";
 import type { CreateSubagentSessionParams } from "#src/lifecycle/create-subagent-session";
 import { SubagentManager } from "#src/lifecycle/subagent-manager";
-import { STUB_SNAPSHOT } from "#test/helpers/stub-ctx";
 import { createSubagentSessionStub, toSubagentSession } from "#test/helpers/mock-session";
+import { STUB_SNAPSHOT } from "#test/helpers/stub-ctx";
 
 function createManager() {
   const createSubagentSession = vi.fn(async (_params: CreateSubagentSessionParams) =>
@@ -52,6 +52,31 @@ describe("SubagentManager child extension factories", () => {
     await manager.getRecord(second)!.promise;
     expect(createSubagentSession.mock.calls[1]?.[0]).toMatchObject({
       childExtensionFactories: [],
+    });
+  });
+
+  it("gives a later child the replacement factory without changing the first child snapshot", async () => {
+    const { manager, createSubagentSession } = createManager();
+    managers.push(manager);
+    const original = vi.fn();
+    const replacement = vi.fn();
+    const disposeOriginal = manager.registerChildExtensionV1("parent-session", {
+      name: "managed-child-tools",
+      factory: original,
+    });
+
+    const first = spawnForOwner(manager, "parent-session");
+    await manager.getRecord(first)!.promise;
+    disposeOriginal();
+    manager.registerChildExtensionV1("parent-session", { name: "managed-child-tools", factory: replacement });
+
+    const second = spawnForOwner(manager, "parent-session");
+    await manager.getRecord(second)!.promise;
+    expect(createSubagentSession.mock.calls[0]?.[0]).toMatchObject({
+      childExtensionFactories: [{ name: "managed-child-tools", factory: original }],
+    });
+    expect(createSubagentSession.mock.calls[1]?.[0]).toMatchObject({
+      childExtensionFactories: [{ name: "managed-child-tools", factory: replacement }],
     });
   });
 

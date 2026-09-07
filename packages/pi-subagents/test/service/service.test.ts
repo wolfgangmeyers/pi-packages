@@ -40,6 +40,7 @@ function makeService(
     subscribeLifecycle: () => () => undefined,
     getLifecycleSnapshots: () => lifecycleSnapshots,
     getLifecycleSnapshotV2: () => lifecycleSnapshotV2,
+    getChildContextRefV1: () => undefined,
     appendControlResultV1: async (contextRef: ContextRefV1, payload: ControlResultPayloadV1): Promise<ControlResultAppendOutcomeV1> => ({
       kind: "accepted",
       result_id: payload.result_id || contextRef,
@@ -114,7 +115,7 @@ describe("owner-scoped SubagentsService registry", () => {
     expect(Object.isFrozen(snapshot.runs[0])).toBe(true);
   });
 
-  it("keeps appendControlResultV1 as the only control-result service operation", async () => {
+  it("exposes only exact-child context lookup alongside control-result append", async () => {
     const service = makeService();
     const payload: ControlResultPayloadV1 = {
       protocol: "mecha.control/v1",
@@ -133,6 +134,7 @@ describe("owner-scoped SubagentsService registry", () => {
       kind: "accepted",
       result_id: payload.result_id,
     });
+    expect(service.getChildContextRefV1("unknown-child")).toBeUndefined();
     expect(service).not.toHaveProperty("getControlContext");
     expect(service).not.toHaveProperty("findControlResult");
   });

@@ -1958,6 +1958,27 @@ describe("SubagentManager — control-result V1", () => {
     expect(manager.getLifecycleSnapshotV2("owner-control").runs[0]?.context_ref).toBeNull();
   });
 
+  it("resolves only the exact live child context for its owning service", async () => {
+    const gate = Promise.withResolvers<{ responseText: string; aborted: boolean; steered: boolean }>();
+    const control = createControlSessionFactory();
+    const child = createControlChild(control, { runTurnLoop: vi.fn(() => gate.promise) });
+    ({ manager } = createManager({ createSubagentSession: vi.fn(async () => child) }));
+    const id = spawnLifecycleV2(manager, "owner-lookup", "entry-lookup", "live child");
+    await vi.waitFor(() => expect(manager!.getRecord(id)?.subagentSession).toBeDefined());
+    const contextRef = controlContext(manager.getLifecycleSnapshotV2("owner-lookup"), id);
+    const childSessionId = manager.getRecord(id)?.subagentSession?.sessionId;
+    expect(typeof childSessionId).toBe("string");
+    if (typeof childSessionId !== "string") throw new Error("Expected child session identity.");
+
+    expect(manager.getChildContextRefV1("owner-lookup", childSessionId)).toBe(contextRef);
+    expect(manager.getChildContextRefV1("wrong-owner", childSessionId)).toBeUndefined();
+    expect(manager.getChildContextRefV1("owner-lookup", "wrong-child")).toBeUndefined();
+
+    gate.resolve({ responseText: "done", aborted: false, steered: false });
+    await manager.getRecord(id)?.promise;
+    expect(manager.getChildContextRefV1("owner-lookup", childSessionId)).toBeUndefined();
+  });
+
   it("validates before appending to the exact live child and returns a structured accepted outcome", async () => {
     const gate = Promise.withResolvers<{ responseText: string; aborted: boolean; steered: boolean }>();
     const control = createControlSessionFactory();

@@ -123,6 +123,9 @@ export interface SubagentsService {
   /** Return the manager's bounded, deeply frozen service snapshot for this owner. */
   getLifecycleSnapshotV2(ownerSessionId: string): LifecycleSnapshotV2ServiceResult;
 
+  /** Resolve the opaque live context reference for one exact child session of this service owner. */
+  getChildContextRefV1(childSessionId: string): ContextRefV1 | undefined;
+
   /** Append a validated control result to the exact manager-issued live child context. */
   appendControlResultV1(
     contextRef: ContextRefV1,

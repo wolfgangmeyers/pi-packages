@@ -38,6 +38,7 @@ export interface SubagentManagerLike {
   subscribeLifecycle(listener: SubagentLifecycleListener): () => void;
   getLifecycleSnapshots(): readonly SubagentLifecycleSnapshot[];
   getLifecycleSnapshotV2(ownerSessionId: string): LifecycleSnapshotV2ServiceResult;
+  getChildContextRefV1(ownerSessionId: string, childSessionId: string): ContextRefV1 | undefined;
   appendControlResultV1(
     contextRef: ContextRefV1,
     payload: ControlResultPayloadV1,
@@ -123,6 +124,12 @@ export class SubagentsServiceAdapter implements SubagentsService {
 
   getLifecycleSnapshotV2(ownerSessionId: string): LifecycleSnapshotV2ServiceResult {
     return this.manager.getLifecycleSnapshotV2(ownerSessionId);
+  }
+
+  getChildContextRefV1(childSessionId: string): ContextRefV1 | undefined {
+    const ownerSessionId = this.runtime.currentCtx?.sessionManager.getSessionId();
+    if (typeof ownerSessionId !== "string" || ownerSessionId.length === 0) return undefined;
+    return this.manager.getChildContextRefV1(ownerSessionId, childSessionId);
   }
 
   appendControlResultV1(
