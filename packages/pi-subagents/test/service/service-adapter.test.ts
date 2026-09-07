@@ -168,6 +168,7 @@ function createManagerStub() {
     getLifecycleSnapshots: vi.fn<SubagentManagerLike["getLifecycleSnapshots"]>(() => []),
     getLifecycleSnapshotV2: vi.fn<SubagentManagerLike["getLifecycleSnapshotV2"]>(),
     appendControlResultV1: vi.fn<SubagentManagerLike["appendControlResultV1"]>(),
+    registerChildExtensionV1: vi.fn<SubagentManagerLike["registerChildExtensionV1"]>(() => () => {}),
   };
 }
 
@@ -576,5 +577,30 @@ describe("SubagentsServiceAdapter — lifecycle", () => {
 
     expect(svc.getLifecycleSnapshots()).toBe(snapshots);
     expect(mgr.getLifecycleSnapshots).toHaveBeenCalledOnce();
+  });
+
+  it("binds a child extension factory to the active service owner", () => {
+    const mgr = createManagerStub();
+    const disposer = vi.fn();
+    mgr.registerChildExtensionV1.mockReturnValue(disposer);
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), makeRuntimeStub());
+    const factory = vi.fn();
+
+    expect(svc.registerChildExtensionV1({ name: "managed-child-tools", factory })).toBe(disposer);
+    expect(mgr.registerChildExtensionV1).toHaveBeenCalledExactlyOnceWith(
+      "stub-session",
+      { name: "managed-child-tools", factory },
+    );
+  });
+
+  it("rejects child extension registration without an active owner", () => {
+    const runtime = makeRuntimeStub({ currentCtx: undefined });
+    const mgr = createManagerStub();
+    const svc = new SubagentsServiceAdapter(mgr, vi.fn(), runtime);
+
+    expect(() => svc.registerChildExtensionV1({ name: "managed-child-tools", factory: vi.fn() })).toThrow(
+      "Cannot register a child extension without an active owner session.",
+    );
+    expect(mgr.registerChildExtensionV1).not.toHaveBeenCalled();
   });
 });

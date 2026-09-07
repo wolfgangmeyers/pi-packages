@@ -144,6 +144,7 @@ export default function (pi: ExtensionAPI) {
     unpublishSubagentsService,
     registerSubagentsServiceOwnerRelease,
     (ownerSessionId, disposition) => manager.releaseLifecycleV2Owner(ownerSessionId, disposition),
+    (ownerSessionId) => manager.releaseChildExtensionFactoriesForOwner(ownerSessionId),
   );
 
   const lifecycle = new SessionLifecycleHandler(

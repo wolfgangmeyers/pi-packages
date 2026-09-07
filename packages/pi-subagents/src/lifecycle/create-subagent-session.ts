@@ -15,6 +15,7 @@
 import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
+  type InlineExtension,
   type SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentConfigLookup } from "#src/config/agent-types";
@@ -47,6 +48,13 @@ function applyRecursionGuard(session: AgentSession): void {
 /** Minimal resource-loader contract used by the factory. */
 export interface ResourceLoaderLike {
   reload(): Promise<void>;
+  /** Loaded inline extensions expose their registrations before the SDK session exists. */
+  getExtensions?(): {
+    extensions: ReadonlyArray<{
+      path: string;
+      tools: ReadonlyMap<string, unknown>;
+    }>;
+  };
 }
 
 /** Minimal session-manager contract used by the factory. */
@@ -66,6 +74,8 @@ export interface ResourceLoaderOptions {
   systemPromptOverride?: () => string;
   /** Override the append system prompt. Receives the current base value; return the replacement. */
   appendSystemPromptOverride?: (base: string[]) => string[];
+  /** Owner-bound inline extensions snapshotted before this child begins loading resources. */
+  extensionFactories?: InlineExtension[];
 }
 
 /** Options passed to SessionFactoryIO.createSession. */
@@ -137,6 +147,8 @@ export interface CreateSubagentSessionParams {
   parentSession?: ParentSessionInfo;
   model?: Model<any>;
   thinkingLevel?: ThinkingLevel;
+  /** Owner-bound factories captured by the manager when this child was spawned. */
+  childExtensionFactories?: readonly InlineExtension[];
 }
 
 /**
@@ -190,8 +202,18 @@ export async function createSubagentSession(
     noContextFiles: true,
     systemPromptOverride: () => cfg.systemPrompt,
     appendSystemPromptOverride: () => [],
+    extensionFactories: [...(params.childExtensionFactories ?? [])],
   });
   await loader.reload();
+
+  // Pi filters all registered tools through `tools` while constructing the
+  // session. Inline child factories have already registered their tools at this
+  // point, so explicitly allow those names before the first provider request.
+  const loadedExtensions = loader.getExtensions?.().extensions;
+  const inlineFactoryToolNames = loadedExtensions
+    ?.filter((extension) => extension.path.startsWith("<inline:"))
+    .flatMap((extension) => [...extension.tools.keys()]) ?? [];
+  const toolNames = [...new Set([...cfg.toolNames, ...inlineFactoryToolNames])];
 
   // Create a persisted SessionManager so transcripts are written in Pi's
   // official JSONL format. Falls back to a temp directory when the parent
@@ -208,7 +230,7 @@ export async function createSubagentSession(
     settingsManager: deps.io.createSettingsManager(cfg.effectiveCwd, agentDir),
     modelRegistry: snapshot.modelRegistry,
     model: cfg.model,
-    tools: cfg.toolNames,
+    tools: toolNames,
     resourceLoader: loader,
     thinkingLevel: cfg.thinkingLevel,
   });

@@ -48,6 +48,7 @@ export class OwnerScopedServiceRegistration implements LifecycleServiceRegistrat
     private readonly unpublishService: (ownerSessionId: string, service: SubagentsService) => void,
     private readonly registerOwnerRelease: OwnerReleaseRegistration = registerSubagentsServiceOwnerRelease,
     private readonly releaseLifecycleV2Owner: (ownerSessionId: string, disposition: "disposed-child") => void = () => undefined,
+    private readonly releaseChildExtensionFactoriesForOwner: (ownerSessionId: string) => void = () => undefined,
   ) {}
 
   publish(ownerSessionId: string): void {
@@ -75,6 +76,7 @@ export class OwnerScopedServiceRegistration implements LifecycleServiceRegistrat
     this.unregisterOwnerRelease = undefined;
     try {
       unregisterOwnerRelease?.();
+      this.releaseChildExtensionFactoriesForOwner(ownerSessionId);
     } finally {
       this.unpublishService(ownerSessionId, this.service);
     }

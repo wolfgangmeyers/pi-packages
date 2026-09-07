@@ -120,6 +120,7 @@ function makeService(): SubagentsService {
       runs: [],
     }),
     appendControlResultV1: async (_contextRef, payload) => ({ kind: "accepted", result_id: payload.result_id }),
+    registerChildExtensionV1: () => () => undefined,
     registerWorkspaceProvider: () => () => undefined,
   };
 }

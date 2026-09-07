@@ -116,6 +116,49 @@ describe("createSubagentSession — assembly", () => {
     const sm = io.createSessionManager.mock.results[0].value;
     expect(sm.newSession).toHaveBeenCalledWith({ parentSession: "parent-id-123" });
   });
+
+  it("supplies a spawn snapshot of child inline factories before reload and bind", async () => {
+    const loader = { reload: vi.fn().mockResolvedValue(undefined) };
+    io.createResourceLoader.mockReturnValue(loader);
+    const factory = vi.fn();
+
+    await createSubagentSession(
+      {
+        snapshot: STUB_SNAPSHOT,
+        type: "Plan",
+        childExtensionFactories: [{ name: "managed-child-tools", factory }],
+      },
+      createSubagentSessionDeps({ io, exec, registry: mockAgentLookup }),
+    );
+
+    expect(io.createResourceLoader).toHaveBeenCalledWith(expect.objectContaining({
+      extensionFactories: [{ name: "managed-child-tools", factory }],
+    }));
+    expect(loader.reload.mock.invocationCallOrder[0]).toBeLessThan(session.bindExtensions.mock.invocationCallOrder[0]);
+  });
+
+  it("allows tools registered by inline child factories before creating the first turn", async () => {
+    const loader = {
+      reload: vi.fn().mockResolvedValue(undefined),
+      getExtensions: vi.fn().mockReturnValue({
+        extensions: [
+          { path: "<inline:managed-child-tools>", tools: new Map([["goal", {}]]) },
+          { path: "/tmp/unrelated-extension.ts", tools: new Map([["unrelated", {}]]) },
+        ],
+      }),
+    };
+    io.createResourceLoader.mockReturnValue(loader);
+
+    await createSubagentSession(
+      { snapshot: STUB_SNAPSHOT, type: "Plan" },
+      createSubagentSessionDeps({ io, exec, registry: mockAgentLookup }),
+    );
+
+    expect(io.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      tools: expect.arrayContaining(["goal"]),
+    }));
+    expect(io.createSession.mock.calls[0][0].tools).not.toContain("unrelated");
+  });
 });
 
 describe("createSubagentSession — lifecycle ordering", () => {

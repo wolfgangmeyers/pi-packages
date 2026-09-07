@@ -8,6 +8,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Model } from "@earendil-works/pi-ai";
+import type { ExtensionFactory, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { debugLog } from "#src/debug";
 import type { ConcurrencyLimiter } from "#src/lifecycle/concurrency-limiter";
 import type { CreateSubagentSessionParams } from "#src/lifecycle/create-subagent-session";
@@ -19,7 +20,11 @@ import type { WorkspaceProvider } from "#src/lifecycle/workspace";
 import { journalSubagentError, journalSubagentEvent } from "#src/observation/instrumentation";
 
 import type { RunConfig } from "#src/runtime";
-import type { SubagentLifecycleListener, SubagentLifecycleSnapshot } from "#src/service/service";
+import type {
+  ChildExtensionRegistrationV1,
+  SubagentLifecycleListener,
+  SubagentLifecycleSnapshot,
+} from "#src/service/service";
 import type {
   AgentInvocation,
   BoundedJsonObjectV1,
@@ -50,6 +55,8 @@ export const MAX_V2_STRING_UTF8_BYTES = 8 * 1024;
 const LIFECYCLE_V2_SEQUENCE_REGISTRY_KEY = Symbol.for("@gotgenes/pi-subagents/lifecycle-v2-sequence-registry");
 const LIFECYCLE_V2_SNAPSHOT_ID_PLACEHOLDER = "00000000-0000-4000-8000-000000000000";
 const MAX_LIFECYCLE_V2_SEQUENCE_OWNERS = 100;
+const MAX_CHILD_EXTENSION_FACTORIES_PER_OWNER = 16;
+const CHILD_EXTENSION_FACTORY_NAME = /^[a-z][a-z0-9_-]{0,95}$/;
 
 export type LifecycleV2ReleaseDisposition = "reload" | "quit" | "new" | "resume" | "fork" | "disposed-child";
 type LifecycleV2MutableFields = Pick<
@@ -465,6 +472,8 @@ export class SubagentManager {
   private controlContextRefByTask = new Map<string, ContextRefV1>();
   /** Process-global registry claims held by this manager for explicit lifecycle release. */
   private lifecycleV2OwnerClaims = new Set<string>();
+  /** Code-owned child factories grouped by the exact parent service owner. */
+  private childExtensionFactoriesByOwner = new Map<string, Map<string, ExtensionFactory>>();
   private disposed = false;
   private sweepInterval: ReturnType<typeof setInterval>;
   private readonly observer?: SubagentManagerObserver;
@@ -509,6 +518,46 @@ export class SubagentManager {
     return () => {
       if (this._workspaceProvider === provider) this._workspaceProvider = undefined;
     };
+  }
+
+  /**
+   * Register one fixed code-owned factory for future children of an owner.
+   * The name is a bounded collision domain, and callers only receive a disposer
+   * for their own exact registration. Child creation takes an immutable list
+   * snapshot, so later disposal cannot affect a child that has already spawned.
+   */
+  registerChildExtensionV1(
+    ownerSessionId: string,
+    registration: ChildExtensionRegistrationV1,
+  ): () => void {
+    if (typeof ownerSessionId !== "string" || ownerSessionId.length === 0 || Buffer.byteLength(ownerSessionId, "utf8") > MAX_V2_STRING_UTF8_BYTES) {
+      throw new Error("Child extension factory owner must be a bounded session ID.");
+    }
+    if (!CHILD_EXTENSION_FACTORY_NAME.test(registration.name) || typeof registration.factory !== "function") {
+      throw new Error("Child extension factory registration is invalid.");
+    }
+    const factories = this.childExtensionFactoriesByOwner.get(ownerSessionId) ?? new Map<string, ExtensionFactory>();
+    if (factories.has(registration.name)) {
+      throw new Error("Child extension factory name is already registered for this owner.");
+    }
+    if (factories.size >= MAX_CHILD_EXTENSION_FACTORIES_PER_OWNER) {
+      throw new Error(`Child extension factory limit (${MAX_CHILD_EXTENSION_FACTORIES_PER_OWNER}) reached for this owner.`);
+    }
+    factories.set(registration.name, registration.factory);
+    this.childExtensionFactoriesByOwner.set(ownerSessionId, factories);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      if (this.childExtensionFactoriesByOwner.get(ownerSessionId) !== factories || factories.get(registration.name) !== registration.factory) return;
+      factories.delete(registration.name);
+      if (factories.size === 0) this.childExtensionFactoriesByOwner.delete(ownerSessionId);
+    };
+  }
+
+  /** Clear all factories belonging to an owner during service release or shutdown. */
+  releaseChildExtensionFactoriesForOwner(ownerSessionId: string): void {
+    this.childExtensionFactoriesByOwner.delete(ownerSessionId);
   }
 
   /** Subscribe to redacted live lifecycle snapshots. */
@@ -585,6 +634,7 @@ export class SubagentManager {
    * the sequence high-water; every other disposition removes that owner entry.
    */
   releaseLifecycleV2Owner(ownerSessionId: string, disposition: LifecycleV2ReleaseDisposition): void {
+    this.releaseChildExtensionFactoriesForOwner(ownerSessionId);
     this.invalidateControlContextsForOwner(ownerSessionId);
     if (!this.lifecycleV2OwnerClaims.delete(ownerSessionId)) return;
     const registry = getLifecycleV2SequenceRegistry();
@@ -958,6 +1008,14 @@ export class SubagentManager {
     }
   }
 
+  /** Snapshot only public inline-extension capabilities for one child spawn. */
+  private snapshotChildExtensionFactories(ownerSessionId: string | undefined): InlineExtension[] {
+    if (ownerSessionId === undefined) return [];
+    const factories = this.childExtensionFactoriesByOwner.get(ownerSessionId);
+    if (factories === undefined) return [];
+    return [...factories.entries()].map(([name, factory]) => ({ name, factory }));
+  }
+
   /** Compose a per-agent lifecycle observer from manager and spawn-config concerns. */
   private buildObserver(options: AgentSpawnConfig): SubagentLifecycleObserver {
     return {
@@ -1031,6 +1089,10 @@ export class SubagentManager {
     options: AgentSpawnConfig,
   ): string {
     const id = randomUUID().slice(0, 17);
+    // Take the owner registration snapshot at spawn, before workspace preparation
+    // or child loader construction can yield. Existing children remain stable when
+    // a parent disposes or replaces a registration later.
+    const childExtensionFactories = this.snapshotChildExtensionFactories(options.parentSession?.parentSessionId);
     const record = new Subagent({
       id,
       type,
@@ -1041,7 +1103,10 @@ export class SubagentManager {
         startedAt: Date.now(),
       }),
       execution: {
-        createSubagentSession: this.createSubagentSession,
+        createSubagentSession: (params) => this.createSubagentSession({
+          ...params,
+          childExtensionFactories,
+        }),
         snapshot,
         prompt,
         baseCwd: this.baseCwd,
@@ -1210,5 +1275,6 @@ export class SubagentManager {
     this.controlContextsByRef.clear();
     this.controlContextRefByTask.clear();
     this.lifecycleV2Listeners.clear();
+    this.childExtensionFactoriesByOwner.clear();
   }
 }

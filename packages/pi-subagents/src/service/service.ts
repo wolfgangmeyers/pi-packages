@@ -9,6 +9,7 @@
  *   svc?.spawn("Plan", "Check for stale TODOs");
  */
 
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { debugLog } from "#src/debug";
 import type { SubagentStatus } from "#src/lifecycle/subagent";
 import type { LifetimeUsage } from "#src/lifecycle/usage";
@@ -76,6 +77,12 @@ export interface SubagentRecord {
   compactionCount: number;
 }
 
+/** A fixed, code-owned child extension factory registered by one parent service owner. */
+export interface ChildExtensionRegistrationV1 {
+  readonly name: string;
+  readonly factory: ExtensionFactory;
+}
+
 /** Options for spawning an agent via the service. */
 export interface SpawnOptions {
   description?: string;
@@ -121,6 +128,13 @@ export interface SubagentsService {
     contextRef: ContextRefV1,
     payload: ControlResultPayloadV1,
   ): Promise<ControlResultAppendOutcomeV1>;
+
+  /**
+   * Register one fixed inline extension factory for future children of this
+   * service owner. Duplicate names fail closed; disposal or owner release
+   * removes the registration without changing already-spawned children.
+   */
+  registerChildExtensionV1(registration: ChildExtensionRegistrationV1): () => void;
 
   /**
    * Register the single workspace provider that supplies a child's working

@@ -9,6 +9,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ParentSnapshot } from "#src/lifecycle/parent-snapshot";
 import type { WorkspaceProvider } from "#src/lifecycle/workspace";
 import type {
+  ChildExtensionRegistrationV1,
   LifecycleSnapshotV2ServiceResult,
   SpawnOptions,
   SubagentLifecycleListener,
@@ -41,6 +42,10 @@ export interface SubagentManagerLike {
     contextRef: ContextRefV1,
     payload: ControlResultPayloadV1,
   ): Promise<ControlResultAppendOutcomeV1>;
+  registerChildExtensionV1(
+    ownerSessionId: string,
+    registration: ChildExtensionRegistrationV1,
+  ): () => void;
 }
 
 /**
@@ -125,6 +130,14 @@ export class SubagentsServiceAdapter implements SubagentsService {
     payload: ControlResultPayloadV1,
   ): Promise<ControlResultAppendOutcomeV1> {
     return this.manager.appendControlResultV1(contextRef, payload);
+  }
+
+  registerChildExtensionV1(registration: ChildExtensionRegistrationV1): () => void {
+    const ownerSessionId = this.runtime.currentCtx?.sessionManager.getSessionId();
+    if (typeof ownerSessionId !== "string" || ownerSessionId.length === 0) {
+      throw new Error("Cannot register a child extension without an active owner session.");
+    }
+    return this.manager.registerChildExtensionV1(ownerSessionId, registration);
   }
 
   /** Resolve an optional model-string override against the current session's registry. */

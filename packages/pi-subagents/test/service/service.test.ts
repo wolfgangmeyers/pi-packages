@@ -44,6 +44,7 @@ function makeService(
       kind: "accepted",
       result_id: payload.result_id || contextRef,
     }),
+    registerChildExtensionV1: () => () => undefined,
     registerWorkspaceProvider: () => () => undefined,
   };
 }
