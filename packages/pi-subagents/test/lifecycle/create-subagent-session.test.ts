@@ -117,7 +117,7 @@ describe("createSubagentSession — assembly", () => {
     expect(sm.newSession).toHaveBeenCalledWith({ parentSession: "parent-id-123" });
   });
 
-  it("supplies a spawn snapshot of child inline factories before reload and bind", async () => {
+  it("loads only a spawn snapshot of child inline factories before reload and bind", async () => {
     const loader = { reload: vi.fn().mockResolvedValue(undefined) };
     io.createResourceLoader.mockReturnValue(loader);
     const factory = vi.fn();
@@ -133,6 +133,7 @@ describe("createSubagentSession — assembly", () => {
 
     expect(io.createResourceLoader).toHaveBeenCalledWith(expect.objectContaining({
       extensionFactories: [{ name: "managed-child-tools", factory }],
+      noExtensions: true,
     }));
     expect(loader.reload.mock.invocationCallOrder[0]).toBeLessThan(session.bindExtensions.mock.invocationCallOrder[0]);
   });

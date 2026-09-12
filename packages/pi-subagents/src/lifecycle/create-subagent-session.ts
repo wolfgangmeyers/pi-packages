@@ -68,6 +68,7 @@ export interface SessionManagerLike {
 export interface ResourceLoaderOptions {
   cwd: string;
   agentDir: string;
+  noExtensions?: boolean;
   noPromptTemplates?: boolean;
   noThemes?: boolean;
   noContextFiles?: boolean;
@@ -188,7 +189,9 @@ export async function createSubagentSession(
 
   const agentDir = deps.io.getAgentDir();
 
-  // Children always load the parent's extensions and skills.
+  // Children inherit only owner-captured inline factories. Reloading ambient
+  // agent-directory extensions would violate a parent's --no-extensions
+  // boundary and can register colliding tools or commands in the child.
   // Suppress AGENTS.md/CLAUDE.md and APPEND_SYSTEM.md - upstream's
   // buildSystemPrompt() re-appends both AFTER systemPromptOverride, which
   // would defeat prompt_mode: replace. Parent context, if wanted, reaches the
@@ -197,6 +200,7 @@ export async function createSubagentSession(
   const loader = deps.io.createResourceLoader({
     cwd: cfg.effectiveCwd,
     agentDir,
+    noExtensions: true,
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
