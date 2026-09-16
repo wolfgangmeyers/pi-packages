@@ -177,6 +177,32 @@ describe("SubagentManager — completion callbacks", () => {
 
     expect(manager.getRecord(id)!.status).toBe("completed");
   });
+
+  it("awaits the optional pre-completion barrier before signaling completion", async () => {
+    const release = Promise.withResolvers<undefined>();
+    const completed = vi.fn();
+    ({ manager } = createManager({ observer: { onSubagentCompleted: completed } }));
+    manager.registerBeforeCompletionHookV1(async () => release.promise);
+
+    const id = spawnBg(manager);
+    await vi.waitFor(() => expect(manager.getRecord(id)!.status).toBe("completed"));
+    expect(completed).not.toHaveBeenCalled();
+
+    release.resolve(undefined);
+    await expect(manager.getRecord(id)!.promise).resolves.toBeUndefined();
+    expect(completed).toHaveBeenCalledOnce();
+  });
+
+  it("suppresses terminal completion signaling when the barrier rejects", async () => {
+    const completed = vi.fn();
+    ({ manager } = createManager({ observer: { onSubagentCompleted: completed } }));
+    manager.registerBeforeCompletionHookV1(async () => { throw new Error("append unavailable"); });
+
+    const id = spawnBg(manager);
+    await expect(manager.getRecord(id)!.promise).resolves.toBeUndefined();
+    expect(manager.getRecord(id)!.status).toBe("completed");
+    expect(completed).not.toHaveBeenCalled();
+  });
 });
 
 describe("SubagentManager — cleanup timer", () => {

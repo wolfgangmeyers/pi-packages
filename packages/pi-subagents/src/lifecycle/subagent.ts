@@ -41,11 +41,11 @@ export interface SubagentLifecycleObserver {
 	/** Fires once the session is created — the subagent's subagentSession is now available. */
 	onSessionCreated?(agent: Subagent): void;
 	/** Fires once when the run completes or fails (for concurrency drain). */
-	onRunFinished?(agent: Subagent): void;
+	onRunFinished?(agent: Subagent): unknown;
 	/** Fires when a resumed run transitions to running. */
 	onResumeStarted?(agent: Subagent): void;
 	/** Fires once when a resumed run reaches a terminal state. */
-	onResumeFinished?(agent: Subagent): void;
+	onResumeFinished?(agent: Subagent): unknown;
 	/** Fires after each explicit compaction transition updates the current run. */
 	onCompactionTransition?(agent: Subagent, transition: CompactionTransitionV2): void;
 	/** Fires on successful compaction events during the run. */
@@ -363,7 +363,7 @@ export class Subagent {
 				journalSubagentError("workspace_prepare", err, { agent_id: this.id, kind: this.type });
 				this.markError(err);
 				this.listeners.release();
-				this.execution.observer?.onRunFinished?.(this);
+				await this.execution.observer?.onRunFinished?.(this);
 				return;
 			}
 		}
@@ -380,7 +380,7 @@ export class Subagent {
 		} catch (err) {
 			// The factory disposed its own session on a post-creation failure.
 			journalSubagentError("session_create", err, { agent_id: this.id, kind: this.type });
-			this.failRun(err);
+			await this.failRun(err);
 			return;
 		}
 
@@ -419,7 +419,7 @@ export class Subagent {
 				this.subagentSession = undefined;
 				this._sessionReleased = true;
 			}
-			this.failRun(err);
+			await this.failRun(err);
 			return;
 		}
 
@@ -431,10 +431,10 @@ export class Subagent {
 				graceTurns: runConfig?.graceTurns,
 				signal: this.abortController.signal,
 			});
-			this.completeRun(result);
+			await this.completeRun(result);
 		} catch (err) {
 			journalSubagentError("turn_loop", err, { agent_id: this.id, kind: this.type });
-			this.failRun(err);
+			await this.failRun(err);
 		}
 	}
 
@@ -499,25 +499,25 @@ export class Subagent {
 		}));
 
 		try {
-			this.completeResume(await subagentSession.resumeTurnLoop(prompt, signal));
+			await this.completeResume(await subagentSession.resumeTurnLoop(prompt, signal));
 		} catch (err) {
 			journalSubagentError("resume_turn_loop", err, { agent_id: this.id, kind: this.type });
-			this.failResume(err);
+			await this.failResume(err);
 		}
 	}
 
 	/** Terminate a resume as completed: mark, release listeners, notify observer. */
-	completeResume(result: string): void {
+	completeResume(result: string): unknown {
 		this.markCompleted(result);
 		this.listeners.release();
-		this.execution.observer?.onResumeFinished?.(this);
+		return this.execution.observer?.onResumeFinished?.(this);
 	}
 
 	/** Terminate a resume as errored: mark, release listeners, notify observer. */
-	failResume(err: unknown): void {
+	failResume(err: unknown): unknown {
 		this.markError(err);
 		this.listeners.release();
-		this.execution.observer?.onResumeFinished?.(this);
+		return this.execution.observer?.onResumeFinished?.(this);
 	}
 
 	/** Transition to running state. Sets status and startedAt. */
@@ -575,7 +575,7 @@ export class Subagent {
 	 */
 	stopQueued(): void {
 		this.state.stopQueued();
-		this.execution.observer?.onRunFinished?.(this);
+		void this.execution.observer?.onRunFinished?.(this);
 	}
 
 	/**
@@ -625,7 +625,7 @@ export class Subagent {
 	}
 
 	/** Complete a run: release listeners, dispose the workspace, status transition, notify observer. */
-	completeRun(result: TurnLoopResult): void {
+	completeRun(result: TurnLoopResult): unknown {
 		this.listeners.release();
 
 		const finalStatus: SubagentStatus = result.aborted
@@ -641,7 +641,7 @@ export class Subagent {
 		else if (result.steered) this.markSteered(finalResult);
 		else this.markCompleted(finalResult);
 
-		this.execution.observer?.onRunFinished?.(this);
+		return this.execution.observer?.onRunFinished?.(this);
 	}
 
 	/** Dispose the wrapped session, firing the `disposed` lifecycle event. */
@@ -664,7 +664,7 @@ export class Subagent {
 	}
 
 	/** Fail a run: mark error, release listeners, best-effort workspace dispose, notify observer. */
-	failRun(err: unknown): void {
+	failRun(err: unknown): unknown {
 		this.markError(err);
 		this.listeners.release();
 
@@ -675,6 +675,6 @@ export class Subagent {
 			debugLog("workspace dispose on agent error", cleanupErr);
 		}
 
-		this.execution.observer?.onRunFinished?.(this);
+		return this.execution.observer?.onRunFinished?.(this);
 	}
 }

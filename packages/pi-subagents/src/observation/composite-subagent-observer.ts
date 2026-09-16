@@ -1,5 +1,5 @@
 import { debugLog } from "#src/debug";
-import type { SubagentManagerObserver } from "#src/lifecycle/subagent-manager";
+import type { BeforeSubagentCompletionHook, SubagentManagerObserver } from "#src/lifecycle/subagent-manager";
 import { journalSubagentError } from "#src/observation/instrumentation";
 import type { CompactionInfo, Subagent } from "#src/types";
 
@@ -12,6 +12,7 @@ import type { CompactionInfo, Subagent } from "#src/types";
  */
 export class CompositeSubagentObserver implements SubagentManagerObserver {
   private readonly delegates: SubagentManagerObserver[];
+  private readonly beforeCompletionHooks = new Set<BeforeSubagentCompletionHook>();
 
   constructor(delegates: SubagentManagerObserver[]) {
     this.delegates = [...delegates];
@@ -20,6 +21,25 @@ export class CompositeSubagentObserver implements SubagentManagerObserver {
   /** Register an additional observer (breaks the widget↔manager construction cycle). */
   add(observer: SubagentManagerObserver): void {
     this.delegates.push(observer);
+  }
+
+  addBeforeCompletionHook(hook: BeforeSubagentCompletionHook): () => void {
+    this.beforeCompletionHooks.add(hook);
+    let registered = true;
+    return () => {
+      if (!registered) return;
+      registered = false;
+      this.beforeCompletionHooks.delete(hook);
+    };
+  }
+
+  beforeSubagentCompleted(record: Subagent): void | Promise<void> {
+    if (this.beforeCompletionHooks.size === 0) return;
+    let chain: Promise<void> | undefined;
+    for (const hook of this.beforeCompletionHooks) {
+      chain = (chain ?? Promise.resolve()).then(() => hook(record)).then(() => undefined);
+    }
+    return chain;
   }
 
   onSubagentStarted(record: Subagent): void {

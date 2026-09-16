@@ -415,9 +415,15 @@ const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
 };
 
 /** Observer interface for agent lifecycle notifications. */
+export type BeforeSubagentCompletionHook = (record: Subagent) => void | Promise<void>;
+
 export interface SubagentManagerObserver {
+  /** Register an optional awaitable barrier owned by a cross-extension observer. */
+  addBeforeCompletionHook?(hook: BeforeSubagentCompletionHook): () => void;
   onSubagentStarted(record: Subagent): void;
   onSubagentCompleted(record: Subagent): void;
+  /** Optional awaitable barrier before terminal persistence/signaling. */
+  beforeSubagentCompleted?(record: Subagent): void | Promise<void>;
   /** Fires when a resumed run reaches a terminal state (distinct from a fresh completion). */
   onSubagentResumed(record: Subagent): void;
   onSubagentCompacted(record: Subagent, info: CompactionInfo): void;
@@ -477,6 +483,7 @@ export class SubagentManager {
   private disposed = false;
   private sweepInterval: ReturnType<typeof setInterval>;
   private readonly observer?: SubagentManagerObserver;
+  private readonly beforeCompletionHooks = new Set<BeforeSubagentCompletionHook>();
   private readonly createSubagentSession: (params: CreateSubagentSessionParams) => Promise<SubagentSession>;
   private readonly limiter: ConcurrencyLimiter;
   private readonly baseCwd: string;
@@ -1029,6 +1036,32 @@ export class SubagentManager {
     return [...factories.entries()].map(([name, factory]) => ({ name, factory }));
   }
 
+  /** Run optional pre-completion barriers before terminal observer persistence/signaling. */
+  private beforeSubagentCompleted(record: Subagent): void | Promise<void> {
+    let chain: Promise<void> | undefined;
+    const observerBarrier = this.observer?.beforeSubagentCompleted?.(record);
+    if (observerBarrier !== undefined) {
+      chain = Promise.resolve(observerBarrier).then(() => undefined);
+    }
+    for (const hook of this.beforeCompletionHooks) {
+      chain = (chain ?? Promise.resolve()).then(() => hook(record)).then(() => undefined);
+    }
+    return chain;
+  }
+
+  /** Register a narrow owner-bound barrier used by optional cross-extension persistence. */
+  registerBeforeCompletionHookV1(hook: BeforeSubagentCompletionHook): () => void {
+    const observerRegistration = this.observer?.addBeforeCompletionHook?.(hook);
+    if (observerRegistration !== undefined) return observerRegistration;
+    this.beforeCompletionHooks.add(hook);
+    let registered = true;
+    return () => {
+      if (!registered) return;
+      registered = false;
+      this.beforeCompletionHooks.delete(hook);
+    };
+  }
+
   /** Compose a per-agent lifecycle observer from manager and spawn-config concerns. */
   private buildObserver(options: AgentSpawnConfig): SubagentLifecycleObserver {
     return {
@@ -1053,10 +1086,21 @@ export class SubagentManager {
           debugLog("lifecycle snapshot observer", err);
         }
         this.observeLifecycleV2Mutation(agent);
-        try { this.observer?.onSubagentCompleted(agent); } catch (err) {
-          journalSubagentError("completed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
-          debugLog("onSubagentCompleted observer", err);
+        const finish = (): void => {
+          try { this.observer?.onSubagentCompleted(agent); } catch (err) {
+            journalSubagentError("completed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
+            debugLog("onSubagentCompleted observer", err);
+          }
+        };
+        const barrier = this.beforeSubagentCompleted(agent);
+        if (barrier === undefined) {
+          finish();
+          return;
         }
+        return Promise.resolve(barrier).then(finish).catch((err: unknown) => {
+          journalSubagentError("before_completed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
+          debugLog("beforeSubagentCompleted observer", err);
+        });
       },
       onResumeStarted: (agent) => {
         // Resume replaces the run before this callback. The old binding must be dead before any new row publishes.
@@ -1077,10 +1121,21 @@ export class SubagentManager {
           debugLog("lifecycle snapshot observer", err);
         }
         this.observeLifecycleV2Mutation(agent);
-        try { this.observer?.onSubagentResumed(agent); } catch (err) {
-          journalSubagentError("resumed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
-          debugLog("onSubagentResumed observer", err);
+        const finish = (): void => {
+          try { this.observer?.onSubagentResumed(agent); } catch (err) {
+            journalSubagentError("resumed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
+            debugLog("onSubagentResumed observer", err);
+          }
+        };
+        const barrier = this.beforeSubagentCompleted(agent);
+        if (barrier === undefined) {
+          finish();
+          return;
         }
+        return Promise.resolve(barrier).then(finish).catch((err: unknown) => {
+          journalSubagentError("before_resumed_observer", err, { agent_id: agent.id, kind: agent.type, status: agent.status });
+          debugLog("beforeSubagentCompleted observer", err);
+        });
       },
       onCompactionTransition: (agent) => {
         this.observeLifecycleV2Mutation(agent);

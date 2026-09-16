@@ -96,6 +96,28 @@ describe("CompositeSubagentObserver", () => {
 		});
 	});
 
+	describe("before completion hooks", () => {
+		it("waits for a registered hook and removes it through its disposer", async () => {
+			const composite = new CompositeSubagentObserver([]);
+			const release = Promise.withResolvers<undefined>();
+			const hook = vi.fn(() => release.promise);
+			const dispose = composite.addBeforeCompletionHook(hook);
+			const pending = composite.beforeSubagentCompleted(createTestSubagent({ id: "terminal" }));
+			let settled = false;
+			if (pending !== undefined) pending.then(() => { settled = true; }).catch(() => { settled = true; });
+
+			await Promise.resolve();
+			expect(hook).toHaveBeenCalledOnce();
+			expect(settled).toBe(false);
+			release.resolve(undefined);
+			await pending;
+
+			dispose();
+			await composite.beforeSubagentCompleted(createTestSubagent({ id: "after-dispose" }));
+			expect(hook).toHaveBeenCalledOnce();
+		});
+	});
+
 	describe("add", () => {
 		it("forwards to a delegate registered after construction", () => {
 			const a = makeDelegate();

@@ -83,6 +83,9 @@ export interface ChildExtensionRegistrationV1 {
   readonly factory: ExtensionFactory;
 }
 
+/** Optional owner-bound barrier awaited before terminal observer persistence. */
+export type BeforeSubagentCompletionHookV1 = (record: SubagentRecord) => void | Promise<void>;
+
 /** Options for spawning an agent via the service. */
 export interface SpawnOptions {
   description?: string;
@@ -138,6 +141,12 @@ export interface SubagentsService {
    * removes the registration without changing already-spawned children.
    */
   registerChildExtensionV1(registration: ChildExtensionRegistrationV1): () => void;
+
+  /**
+   * Register one owner-bound terminal persistence barrier. The disposer removes
+   * only this hook; the hook is awaited immediately before completion signaling.
+   */
+  registerBeforeCompletionHookV1?(hook: BeforeSubagentCompletionHookV1): () => void;
 
   /**
    * Register the single workspace provider that supplies a child's working
