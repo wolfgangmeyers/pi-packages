@@ -17,7 +17,6 @@ import {
   type ExtensionAPI,
   getAgentDir,
   SettingsManager as SdkSettingsManager,
-  SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { AgentTypeRegistry } from "#src/config/agent-types";
 import { loadCustomAgents } from "#src/config/custom-agents";
@@ -43,6 +42,7 @@ import { detectEnv } from "#src/session/env";
 import { resolveModel } from "#src/session/model-resolver";
 import { buildAgentPrompt } from "#src/session/prompts";
 import { deriveSubagentSessionDir } from "#src/session/session-dir";
+import { createSubagentSessionManager } from "#src/session/session-manager";
 import { SettingsManager } from "#src/settings";
 import { AgentTool } from "#src/tools/agent-tool";
 import { GetResultTool } from "#src/tools/get-result-tool";
@@ -104,7 +104,7 @@ export default function (pi: ExtensionAPI) {
       getAgentDir,
       createResourceLoader: (opts) => new DefaultResourceLoader(opts),
       deriveSessionDir: deriveSubagentSessionDir,
-      createSessionManager: (cwd, dir) => SessionManager.create(cwd, dir),
+      createSessionManager: createSubagentSessionManager,
       createSettingsManager: (cwd, dir) => SdkSettingsManager.create(cwd, dir),
       createSession: (opts) => createAgentSession(opts as any),
       assemblerIO: {
