@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-argument -- Pi SDK types are not fully exported; see upstream Pi SDK for type improvements */
 /**
  * pi-agents — A pi extension providing focused, in-process autonomous sub-agents.
  *
@@ -106,7 +105,8 @@ export default function (pi: ExtensionAPI) {
       deriveSessionDir: deriveSubagentSessionDir,
       createSessionManager: createSubagentSessionManager,
       createSettingsManager: (cwd, dir) => SdkSettingsManager.create(cwd, dir),
-      createSession: (opts) => createAgentSession(opts as any),
+      createSession: (opts) =>
+        createAgentSession(opts as unknown as Parameters<typeof createAgentSession>[0]),
       assemblerIO: {
         buildAgentPrompt,
       },

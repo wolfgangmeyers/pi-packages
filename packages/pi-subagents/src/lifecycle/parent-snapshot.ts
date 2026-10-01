@@ -20,6 +20,10 @@ export interface ParentSnapshot {
   model: Model<any> | undefined;
   /** Model registry for resolving config.model strings and creating sessions. */
   modelRegistry: ModelRegistry;
+  /** Auth storage for credential resolution (OAuth tokens, API keys). */
+  authStorage?: unknown;
+  /** Model runtime for Pi SDK session creation. */
+  modelRuntime?: unknown;
   /** Pre-built parent conversation text (when inheritContext was requested). */
   parentContext?: string;
 }
@@ -35,11 +39,19 @@ export function buildParentSnapshot(
   inheritContext?: boolean,
 ): ParentSnapshot {
   const parentContext = inheritContext ? buildParentContext(ctx) : undefined;
+  const registryRecord = ctx.modelRegistry as unknown as Record<string, unknown>;
+  const ctxRecord = ctx as unknown as Record<string, unknown>;
+  const modelRuntime = registryRecord.runtime ?? ctxRecord.modelRuntime;
+  const runtimeRecord = modelRuntime as Record<string, unknown> | undefined;
+  const authStorage = registryRecord.authStorage ?? runtimeRecord?.credentials ?? ctxRecord.authStorage;
+
   return {
     cwd: ctx.cwd,
     systemPrompt: ctx.getSystemPrompt(),
     model: ctx.model,
     modelRegistry: ctx.modelRegistry,
+    authStorage,
+    modelRuntime,
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- || intentional: converts empty string to undefined as well as null/undefined
     parentContext: parentContext || undefined,
   };

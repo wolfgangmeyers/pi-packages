@@ -69,4 +69,44 @@ describe("buildParentSnapshot", () => {
     const snapshot = buildParentSnapshot(makeCtx(), true);
     expect(snapshot.parentContext).toBeUndefined();
   });
+
+  it("captures authStorage and modelRuntime from ctx.modelRegistry", () => {
+    const mockAuthStorage = { get: vi.fn() };
+    const mockRuntime = { getModels: vi.fn() };
+    const registry = {
+      find: vi.fn(),
+      getAll: vi.fn(() => []),
+      authStorage: mockAuthStorage,
+      runtime: mockRuntime,
+    };
+    const snapshot = buildParentSnapshot(makeCtx({ modelRegistry: registry }));
+    expect(snapshot.authStorage).toBe(mockAuthStorage);
+    expect(snapshot.modelRuntime).toBe(mockRuntime);
+  });
+
+  it("derives authStorage from modelRuntime.credentials when authStorage is absent", () => {
+    const mockCredentials = { read: vi.fn() };
+    const mockRuntime = { credentials: mockCredentials };
+    const registry = {
+      find: vi.fn(),
+      getAll: vi.fn(() => []),
+      runtime: mockRuntime,
+    };
+    const snapshot = buildParentSnapshot(makeCtx({ modelRegistry: registry }));
+    expect(snapshot.authStorage).toBe(mockCredentials);
+    expect(snapshot.modelRuntime).toBe(mockRuntime);
+  });
+
+  it("captures authStorage and modelRuntime from ctx directly when present", () => {
+    const mockAuthStorage = { get: vi.fn() };
+    const mockModelRuntime = { getAuth: vi.fn() };
+    const snapshot = buildParentSnapshot(
+      makeCtx({
+        authStorage: mockAuthStorage,
+        modelRuntime: mockModelRuntime,
+      }),
+    );
+    expect(snapshot.authStorage).toBe(mockAuthStorage);
+    expect(snapshot.modelRuntime).toBe(mockModelRuntime);
+  });
 });

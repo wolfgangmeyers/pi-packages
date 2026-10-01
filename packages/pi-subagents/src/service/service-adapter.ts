@@ -149,6 +149,7 @@ export class SubagentsServiceAdapter implements SubagentsService {
     return this.manager.registerChildExtensionV1(ownerSessionId, registration);
   }
 
+  // fallow-ignore-next-line unused-class-member
   registerBeforeCompletionHookV1(hook: BeforeSubagentCompletionHookV1): () => void {
     if (this.manager.registerBeforeCompletionHookV1 === undefined) return () => undefined;
     return this.manager.registerBeforeCompletionHookV1((record) => hook(toSubagentRecord(record)));

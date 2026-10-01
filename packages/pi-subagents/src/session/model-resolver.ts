@@ -7,6 +7,8 @@ export interface ModelRegistry {
   find(provider: string, modelId: string): Model<any> | undefined;
   getAll(): Model<any>[];
   getAvailable?(): Model<any>[];
+  readonly authStorage?: unknown;
+  readonly runtime?: unknown;
 }
 
 /** Successful model resolution — `model` is the resolved or inherited model instance. */

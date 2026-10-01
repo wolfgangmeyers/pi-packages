@@ -86,6 +86,8 @@ export interface CreateSessionOptions {
   sessionManager: SessionManagerLike;
   settingsManager: SettingsManager;
   modelRegistry: ModelRegistry;
+  authStorage?: unknown;
+  modelRuntime?: unknown;
   model?: Model<any>;
   tools: string[];
   resourceLoader: ResourceLoaderLike;
@@ -233,6 +235,8 @@ export async function createSubagentSession(
     sessionManager,
     settingsManager: deps.io.createSettingsManager(cfg.effectiveCwd, agentDir),
     modelRegistry: snapshot.modelRegistry,
+    authStorage: snapshot.authStorage,
+    modelRuntime: snapshot.modelRuntime,
     model: cfg.model,
     tools: toolNames,
     resourceLoader: loader,

@@ -87,6 +87,28 @@ describe("createSubagentSession — assembly", () => {
     );
   });
 
+  it("forwards authStorage, modelRuntime, and modelRegistry from snapshot into createSession", async () => {
+    const mockAuthStorage = { get: vi.fn() };
+    const mockModelRuntime = { getModels: vi.fn() };
+    const customSnapshot = {
+      ...STUB_SNAPSHOT,
+      authStorage: mockAuthStorage,
+      modelRuntime: mockModelRuntime,
+    };
+    await createSubagentSession(
+      { snapshot: customSnapshot, type: "Plan" },
+      createSubagentSessionDeps({ io, exec, registry: mockAgentLookup }),
+    );
+
+    expect(io.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRegistry: customSnapshot.modelRegistry,
+        authStorage: mockAuthStorage,
+        modelRuntime: mockModelRuntime,
+      }),
+    );
+  });
+
   it("suppresses AGENTS.md/CLAUDE.md/APPEND_SYSTEM.md for subagents", async () => {
     await createSubagentSession(
       { snapshot: STUB_SNAPSHOT, type: "Plan" },
